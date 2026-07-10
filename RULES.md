@@ -1,7 +1,8 @@
-# RULES.md — Reglas universales de biblio_skills
+# RULES.md — Reglas universales de biblio_skills (referencia numerada)
 
 > Autogenerado por `install.ps1 -Project <ruta>`. No editar a mano.
 > Regenerar cuando las reglas de biblio_skills cambien: `pwsh -File ../biblio_skills/install.ps1 -Project .`
+> Las reglas se aplican automáticamente vía el CLAUDE.md global. Este fichero es solo referencia.
 
 ---
 
