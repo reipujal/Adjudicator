@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>TendersTool Automation</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="container">
+    <h1>TendersTool Automation</h1>
+    <p class="subtitle">Extracción interna de licitaciones / vencimientos vía favoritos guardados.</p>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/ejecutar" class="form">
+      <label>
+        Usuario TendersTool
+        <input type="text" name="username" required autocomplete="username">
+      </label>
+
+      <label>
+        Password TendersTool
+        <input type="password" name="password" required autocomplete="current-password">
+      </label>
+
+      <fieldset>
+        <legend>Tipo de búsqueda</legend>
+        <label class="radio">
+          <input type="radio" name="search_type" value="licitaciones" required checked>
+          Licitaciones
+        </label>
+        <label class="radio">
+          <input type="radio" name="search_type" value="vencimientos" required>
+          Vencimientos
+        </label>
+      </fieldset>
+
+      <label>
+        Nombre del favorito
+        <input type="text" name="favorite_name" required placeholder="Ej: SAP &gt; 1M">
+      </label>
+
+      <label>
+        Número máximo de resultados (vacío = todos)
+        <input type="number" name="max_results" min="1" step="1" placeholder="Ej: 50">
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" name="diagnostic_mode" value="true">
+        Modo diagnóstico / modo fallos
+      </label>
+
+      <button type="submit">Ejecutar extracción</button>
+    </form>
+
+    <p class="note">La contraseña no se almacena en ningún momento: se usa solo en memoria durante esta ejecución.</p>
+  </main>
+</body>
+</html>

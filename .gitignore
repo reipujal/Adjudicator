@@ -14,3 +14,9 @@ exports/
 *.xlsx
 .DS_Store
 .agents/
+
+# tenderstool_app: artefactos generados en tiempo de ejecución
+tenderstool_app/app/downloads/*
+!tenderstool_app/app/downloads/.gitkeep
+tenderstool_app/app/diagnostics/*
+!tenderstool_app/app/diagnostics/.gitkeep

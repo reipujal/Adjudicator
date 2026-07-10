@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Resultado — TendersTool Automation</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="container">
+    <h1>Extracción completada</h1>
+
+    <ul class="summary">
+      <li><strong>Tipo de búsqueda:</strong> {{ result.search_type }}</li>
+      <li><strong>Favorito usado:</strong> {{ result.favorite_name }}</li>
+      <li><strong>Resultados procesados:</strong> {{ result.processed_count }}</li>
+      <li><strong>Registros con error parcial:</strong> {{ result.partial_error_count }}</li>
+      <li><strong>Tiempo total:</strong> {{ "%.1f"|format(result.duration_seconds) }} s</li>
+    </ul>
+
+    <a class="button" href="/descargar/{{ result.excel_path.name }}">Descargar Excel</a>
+    <p><a href="/">&laquo; Nueva extracción</a></p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,28 @@
+# requirements.in — dependencias directas de tenderstool_app
+# Generar lock: uv pip compile requirements.in -o requirements.lock
+# Instalar: uv pip sync requirements.lock
+
+# --- web ---
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+
+# --- automatización de navegador ---
+playwright
+
+# --- parsing HTML ---
+beautifulsoup4
+lxml
+
+# --- datos y exportación ---
+pandas
+openpyxl
+
+# --- configuración ---
+python-dotenv
+
+# --- testing ---
+pytest
+pytest-mock
+httpx
