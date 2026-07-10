@@ -1,0 +1,23 @@
+# requirements.in — dependencias directas de Adjudicator
+# Generar lock: uv pip compile requirements.in -o requirements.lock
+# Instalar: uv pip sync requirements.lock
+
+# --- web ---
+flask
+flask-cors
+
+# --- scraping ---
+requests
+beautifulsoup4
+lxml
+
+# --- datos y exportación ---
+pandas
+openpyxl
+
+# --- configuración ---
+python-dotenv
+
+# --- testing ---
+pytest
+pytest-mock

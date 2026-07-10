@@ -1,0 +1,26 @@
+# Plantilla de pre-commit para proyectos. Copiar a la raíz como .pre-commit-config.yaml
+# Instalar CLIs globales: setup/bootstrap-machine.ps1/.sh o uv tool install pre-commit detect-secrets
+# Activar en el repo: pre-commit install
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+
+  - repo: local
+    hooks:
+      - id: check-encoding
+        name: check UTF-8 / mojibake
+        entry: python scripts/check_encoding.py
+        language: system
+        types: [text]

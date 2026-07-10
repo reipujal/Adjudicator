@@ -1,0 +1,23 @@
+# Plantilla de CI. Copiar a .github/workflows/ci.yml en el proyecto.
+# Gate: el PR no se puede mergear si la suite no pasa (regla 02).
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip sync requirements.lock --system
+      - name: Run tests
+        run: pytest -v        # <-- ajusta al comando real del proyecto
