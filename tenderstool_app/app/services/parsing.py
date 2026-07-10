@@ -6,9 +6,13 @@ reales sin necesidad de navegador ni mocks.
 """
 from __future__ import annotations
 
+import re
+
 from bs4 import BeautifulSoup
 
 from . import selectors
+
+_ORGANISMO_LICITADOR_LABEL_RE = re.compile(r"Organismo licitador", re.IGNORECASE)
 
 
 def normalize_favorite_name(name: str) -> str:
@@ -114,6 +118,23 @@ def parse_vencimientos_listing(html: str) -> list[dict]:
     return rows
 
 
+def _extract_organismo_licitador(soup: BeautifulSoup) -> str | None:
+    """El sitio no tiene un campo 'Órgano de contratación' como tal; el
+    equivalente real es 'Organismo licitador', que vive en la cabecera de la
+    ficha (fuera del bloque .adjudicacion-dato) como texto suelto seguido de
+    un <h2> con el valor. La estructura exacta del contenedor difiere entre
+    ficha de licitación y de adjudicación, así que se localiza por texto y
+    se toma el <h2> siguiente en orden de documento, no por clase de
+    contenedor (verificado en vivo el 2026-07-10 sobre 12 fichas reales)."""
+    label_node = soup.find(string=_ORGANISMO_LICITADOR_LABEL_RE)
+    if label_node is None:
+        return None
+    value_el = label_node.find_next("h2")
+    if value_el is None:
+        return None
+    return value_el.get_text(" ", strip=True)
+
+
 def parse_detail(html: str) -> dict[str, str]:
     """Extrae los pares etiqueta/valor de una ficha (licitación o
     adjudicación: ambas usan las mismas clases .adjudicacion-dato*).
@@ -134,6 +155,11 @@ def parse_detail(html: str) -> dict[str, str]:
         if field_name is None:
             continue
         result[field_name] = value_el.get_text(" ", strip=True)
+
+    organismo = _extract_organismo_licitador(soup)
+    if organismo:
+        result["organismo_licitador"] = organismo
+
     return result
 
 

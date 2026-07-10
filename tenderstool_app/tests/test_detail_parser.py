@@ -10,6 +10,7 @@ def test_parse_detail_adjudicacion_has_all_expected_fields(fixture_html):
     assert data["provincia"] == "Madrid"
     assert data["comunidad_autonoma"] == "Madrid, Comunidad de"
     assert "45 puntos" in data["criterios_adjudicacion"]
+    assert data["organismo_licitador"] == "FUNDACIÓN COLECCIÓN THYSSEN BORNEMISZA"
 
 
 def test_parse_detail_licitacion_missing_fields_are_absent_not_invented(fixture_html):
@@ -21,6 +22,12 @@ def test_parse_detail_licitacion_missing_fields_are_absent_not_invented(fixture_
     assert "importe_adjudicacion_vs_licitacion" not in data
     assert data["numero_expediente"] == "CSI2025005"
     assert data["tipo_procedimiento"] == "Simplificado"
+    assert data["organismo_licitador"] == "CONSORCIO SANITARIO INTEGRAL"
+
+
+def test_parse_detail_organismo_licitador_absent_when_not_present():
+    html = "<html><body><div class='adj-header-1'>sin cabecera reconocible</div></body></html>"
+    assert "organismo_licitador" not in parsing.parse_detail(html)
 
 
 def test_parse_detail_empty_html_returns_empty_dict():

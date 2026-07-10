@@ -35,6 +35,17 @@ se envían por el formulario, no por entorno). Opcional:
 |---|---|---|
 | — | (reservado para futura configuración de timeouts/URL base) | — |
 
+## Descarga del Excel
+
+El botón "Descargar Excel" de la pantalla de resultado usa la File System
+Access API (`showSaveFilePicker`) para abrir el diálogo nativo "Guardar
+como" del navegador y elegir carpeta de destino (`app/static/download.js`).
+Solo la soportan navegadores basados en Chromium (Chrome, Edge) y requiere
+un contexto seguro (`localhost` cuenta como tal; en despliegue detrás de
+VPN sin HTTPS, dejará de estar disponible). Si el navegador no la soporta,
+cae automáticamente a la descarga normal a la carpeta de descargas por
+defecto — nunca se rompe, solo se pierde el diálogo de "dónde guardar".
+
 ## Modo diagnóstico
 
 Checkbox "Modo diagnóstico" en el formulario:
@@ -80,12 +91,17 @@ réplicas.
   `registro.php` y marca la fila como `sin acceso (contenido Platinum)` sin
   intentar sortearlo — es una restricción contractual del proveedor, no un
   bug a resolver.
-- **Campos "Organismo licitador" y "Adjudicatario"**: son visibles en la
-  ficha de detalle real pero no estaban en la lista de campos del encargo
-  original, así que no se extraen. Añadirlos es trivial (mismo patrón
-  `.adjudicacion-dato`, aunque estos dos aparecen en el bloque de cabecera,
-  no en "Otros datos" — requeriría un selector adicional) si se decide que
-  hacen falta.
+- **"Órgano de contratación"**: el sitio no tiene ningún campo con ese
+  nombre literal (comprobado en vivo sobre 12 fichas reales distintas). El
+  campo equivalente real es **"Organismo licitador"**, visible en la
+  cabecera de toda ficha (no en el bloque "Otros datos"), y sí se extrae
+  como columna `organismo_licitador` / "Órgano de contratación (Organismo
+  licitador)" en el Excel.
+- **Campo "Adjudicatario"**: también visible en la cabecera de la ficha de
+  adjudicación, pero sigue sin extraerse (no estaba en la lista de campos
+  del encargo original). Añadirlo es trivial: mismo patrón que
+  `_extract_organismo_licitador` en `parsing.py`, buscando el `<h2>`
+  siguiente al texto "Adjudicatario".
 - **Selectores centralizados**: todo lo específico del DOM vive en
   `app/services/selectors.py`. Si el sitio cambia de estructura, ese es el
   único fichero que debería necesitar tocarse.

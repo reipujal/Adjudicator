@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>Resultado — TendersTool Automation</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/download.js" defer></script>
 </head>
 <body>
   <main class="container">
@@ -17,7 +18,12 @@
       <li><strong>Tiempo total:</strong> {{ "%.1f"|format(result.duration_seconds) }} s</li>
     </ul>
 
-    <a class="button" href="/descargar/{{ result.excel_path.name }}">Descargar Excel</a>
+    <button type="button" id="download-btn" class="button" data-filename="{{ result.excel_path.name }}">
+      Descargar Excel
+    </button>
+    <p id="download-status" class="alert alert-error" style="display:none;"></p>
+    <p class="note">Se abrirá el diálogo "Guardar como" del navegador para elegir la carpeta de destino
+      (si tu navegador no lo soporta, se descargará a la carpeta de descargas por defecto).</p>
     <p><a href="/">&laquo; Nueva extracción</a></p>
   </main>
 </body>

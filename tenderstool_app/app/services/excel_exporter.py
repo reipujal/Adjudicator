@@ -22,6 +22,7 @@ COLUMNS: list[tuple[str, str]] = [
     ("fecha_vencimiento", "Fecha de vencimiento"),
     ("prorrogable_hasta", "Prorrogable hasta"),
     ("titulo", "Título"),
+    ("organismo_licitador", "Órgano de contratación (Organismo licitador)"),
     ("importe", "Importe"),
     ("importe_licitacion", "Importe licitación"),
     ("importe_adjudicacion_vs_licitacion", "Importe adjudicación vs licitación"),
