@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Adjudicator</title>
+</head>
+<body>
+  <h1>Licitaciones y adjudicaciones</h1>
+  {% if records %}
+  <table>
+    <thead>
+      <tr>
+        <th>Expediente</th>
+        <th>Portal</th>
+        <th>Tipo</th>
+        <th>Importe</th>
+        <th>URL</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr>
+        <td>{{ r.expediente }}</td>
+        <td>{{ r.portal }}</td>
+        <td>{{ r.__class__.__name__ }}</td>
+        <td>{{ r.importe }}</td>
+        <td><a href="{{ r.url }}">{{ r.url }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>Sin datos. Añade scrapers para empezar.</p>
+  {% endif %}
+</body>
+</html>
