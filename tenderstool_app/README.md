@@ -1,11 +1,33 @@
 # TendersTool Automation
 
-Aplicación web interna que automatiza, vía Playwright, la ejecución de un
-favorito guardado en TendersTool/AdjudicacionesTIC (Licitaciones o
-Vencimientos), abre cada ficha de detalle y exporta el resultado a Excel.
+Aplicación web interna que automatiza, vía Playwright (API async), la
+ejecución de un favorito guardado en TendersTool/AdjudicacionesTIC
+(Licitaciones o Vencimientos), abre cada ficha de detalle en paralelo
+(acotado) y exporta el resultado a Excel, con progreso en vivo durante la
+ejecución.
 
 Pensada para ejecutarse dentro de la red corporativa/VPN. **No debe
 exponerse a Internet.**
+
+## Flujo de pantallas
+
+Una sola página, dinámica (no hay navegación real entre "login" y
+"selección" — así la password nunca sale del formulario ni se guarda en
+servidor entre pasos):
+
+1. Usuario rellena usuario/password/tipo de búsqueda y pulsa "Buscar
+   favoritos" → `POST /favoritos` hace un login ligero (sesión propia,
+   se cierra al momento), trae la lista real de favoritos de ese módulo y
+   rellena el desplegable por AJAX, sin recargar la página.
+2. Elige favorito, opcionalmente máximo de resultados y modo diagnóstico,
+   pulsa "Ejecutar extracción" → `POST /ejecutar` devuelve al instante una
+   pantalla de progreso con un `run_id` (no bloquea la petición HTTP: la
+   extracción corre en segundo plano).
+3. La pantalla de progreso sondea `GET /progreso/{run_id}` cada 1.5s y
+   muestra los últimos pasos en vivo (login, página N, ficha N/M…).
+4. Al terminar, redirige a `GET /resultado/{run_id}`: resumen + botón de
+   descarga (éxito) o mensaje de error (`usr/pwd incorrectos`, `favorito no
+   encontrado`, error técnico).
 
 ## Instalación
 
@@ -34,6 +56,23 @@ se envían por el formulario, no por entorno). Opcional:
 | Variable | Uso | Por defecto |
 |---|---|---|
 | — | (reservado para futura configuración de timeouts/URL base) | — |
+
+## Progreso en vivo y concurrencia
+
+- El motor (`app/services/tenderstool_client.py`) usa la API async de
+  Playwright, no la síncrona: es lo que permite reportar progreso sin
+  bloquear el hilo del servidor y abrir varias fichas de detalle en
+  paralelo desde el mismo contexto de navegador.
+- Las fichas de detalle se extraen con concurrencia acotada a
+  `MAX_DETAIL_CONCURRENCY = 4` (constante en `tenderstool_client.py`) —
+  deliberadamente limitada para no saturar el sitio real con demasiadas
+  pestañas simultáneas.
+- El estado de cada ejecución (pasos, si terminó, resultado o error) vive
+  en `app/services/run_registry.py`, un registro en memoria de proceso.
+  Igual que el guard de concurrencia anterior, esto asume un único worker
+  de uvicorn (ver sección Docker) y no persiste entre reinicios ni limpia
+  ejecuciones antiguas — aceptable para un piloto de un usuario; si esto
+  crece, añadir una TTL/limpieza sería lo primero a hacer.
 
 ## Descarga del Excel
 
@@ -74,12 +113,9 @@ réplicas.
 
 ## Limitaciones conocidas
 
-- **Paginación**: se ha verificado el mecanismo de "página 1" en vivo; el
-  comportamiento de páginas siguientes usa el patrón estándar de DataTables
-  (click en el botón "Siguiente", detección de fin por botón deshabilitado o
-  ausencia de filas nuevas) pero no se ha ejecutado un recorrido completo de
-  varias páginas contra el sitio real. Calibrar si aparecen filas
-  duplicadas o cortes prematuros.
+- **Paginación**: verificada en vivo con un favorito real de 23 resultados
+  (3 páginas de 10+10+3) — el click en "Siguiente" y la detección de fin
+  por botón deshabilitado funcionan correctamente contra el sitio real.
 - **Mensaje exacto de login incorrecto**: no se ha provocado un login
   fallido real contra el sitio (para no generar ruido en la cuenta del
   cliente). La detección actual asume fallo si, tras enviar el formulario,
@@ -139,8 +175,22 @@ réplicas.
    (`ajax-busquedas-favoritas-consultar.php`) directamente. Si el sitio
    cambia ese endpoint, este es el punto a revisar primero.
 
+## Tests
+
+```bash
+pytest              # suite normal (offline, sin tocar el sitio real)
+pytest -m integration   # chequeo de salud contra el sitio real:
+                        # requiere TENDERSTOOL_USER/TENDERSTOOL_PASSWORD
+                        # reales en el entorno (ver tests/test_live_site_health.py).
+                        # Si falla, el sitio probablemente cambió de
+                        # estructura — repetir la inspección de la sección
+                        # anterior antes de tocar nada más.
+```
+
 ## Próximos pasos (fuera del alcance del MVP)
 
-Diagnóstico avanzado más detallado, mejoras visuales, cola de trabajos para
-varias ejecuciones en paralelo, autenticación corporativa delante de la
-app, histórico de ejecuciones.
+Diagnóstico avanzado más detallado (tracing de Playwright), mejoras
+visuales, cola de trabajos para varias ejecuciones en paralelo (más allá
+del guard actual de "una a la vez"), autenticación corporativa delante de
+la app, histórico de ejecuciones, limpieza/TTL del registro de progreso en
+memoria.

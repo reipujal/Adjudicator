@@ -1,20 +1,25 @@
-"""Orquestación Playwright: login, navegación, favoritos, extracción y
-paginación. La lógica de parsing en sí vive en parsing.py (pura, testable
-sin navegador); este módulo solo mueve el navegador y delega el parseo.
+"""Orquestación Playwright (API async): login, navegación, favoritos,
+extracción y paginación. La lógica de parsing en sí vive en parsing.py
+(pura, testable sin navegador); este módulo solo mueve el navegador y
+delega el parseo. La API async permite abrir varias fichas de detalle en
+paralelo (acotado por semáforo) y reportar progreso en vivo sin bloquear
+el hilo del servidor.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
-from playwright.sync_api import (
+from playwright.async_api import (
     BrowserContext,
     Page,
     TimeoutError as PlaywrightTimeoutError,
-    sync_playwright,
+    async_playwright,
 )
 
 from . import excel_exporter, parsing, selectors
@@ -23,6 +28,8 @@ from .diagnostics import DiagnosticsLogger, resolve_headless
 DEFAULT_PAGE_TIMEOUT_MS = 30_000
 DEFAULT_DETAIL_TIMEOUT_MS = 20_000
 MAX_PAGINATION_PAGES = 200  # cinturón de seguridad anti bucle infinito
+MAX_DETAIL_CONCURRENCY = 4  # fichas en paralelo; acotado a propósito para no
+# machacar el sitio real con demasiadas pestañas simultáneas
 
 
 class LoginError(Exception):
@@ -64,55 +71,57 @@ class ExtractionResult:
     run_id: str
 
 
-def accept_cookies_if_present(page: Page) -> None:
+async def accept_cookies_if_present(page: Page) -> None:
     try:
-        page.click(selectors.COOKIE_ACCEPT_SELECTOR, timeout=3000)
-        page.wait_for_load_state("networkidle")
+        await page.click(selectors.COOKIE_ACCEPT_SELECTOR, timeout=3000)
+        await page.wait_for_load_state("networkidle")
     except PlaywrightTimeoutError:
         pass
 
 
-def login(page: Page, username: str, password: str, diag: DiagnosticsLogger) -> None:
+async def login(page: Page, username: str, password: str, diag: DiagnosticsLogger) -> None:
     diag.step("login iniciado")
     try:
-        page.goto(selectors.LOGIN_URL, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
-        accept_cookies_if_present(page)
+        await page.goto(selectors.LOGIN_URL, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        await accept_cookies_if_present(page)
         if selectors.LOGIN_URL_MARKER not in page.url:
-            page.goto(selectors.LOGIN_URL, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
-        page.fill(selectors.USERNAME_SELECTOR, username, timeout=DEFAULT_PAGE_TIMEOUT_MS)
-        page.fill(selectors.PASSWORD_SELECTOR, password, timeout=DEFAULT_PAGE_TIMEOUT_MS)
-        with page.expect_navigation(timeout=DEFAULT_PAGE_TIMEOUT_MS):
-            page.click(selectors.SUBMIT_SELECTOR)
+            await page.goto(selectors.LOGIN_URL, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        await page.fill(selectors.USERNAME_SELECTOR, username, timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        await page.fill(selectors.PASSWORD_SELECTOR, password, timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        async with page.expect_navigation(timeout=DEFAULT_PAGE_TIMEOUT_MS):
+            await page.click(selectors.SUBMIT_SELECTOR)
     except PlaywrightTimeoutError as exc:
-        diag.error_screenshot(page, "login_timeout")
+        await diag.error_screenshot(page, "login_timeout")
         raise TenderstoolTimeoutError("Timeout durante el login") from exc
 
     if selectors.LOGIN_URL_MARKER in page.url:
-        diag.error_screenshot(page, "login_fallido")
+        await diag.error_screenshot(page, "login_fallido")
         raise LoginError("usr/pwd incorrectos")
 
     diag.step("login correcto")
 
 
-def go_to_search_type(page: Page, search_type: selectors.SearchType, diag: DiagnosticsLogger) -> None:
+async def go_to_search_type(page: Page, search_type: selectors.SearchType, diag: DiagnosticsLogger) -> None:
     url = selectors.MODULE_URLS[search_type]
     try:
-        page.goto(url, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        await page.goto(url, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
     except PlaywrightTimeoutError as exc:
-        diag.error_screenshot(page, "navegacion_modulo_timeout")
+        await diag.error_screenshot(page, "navegacion_modulo_timeout")
         raise TenderstoolTimeoutError(f"Timeout navegando al módulo {search_type.value}") from exc
     diag.step(f"navegación a módulo: {search_type.value}")
 
 
-def open_favorites(page: Page, diag: DiagnosticsLogger) -> list[tuple[str, str]]:
+async def open_favorites(page: Page, diag: DiagnosticsLogger) -> list[tuple[str, str]]:
     """Lee la lista de favoritos ya presente en la página del buscador (no
     requiere abrir el modal de la UI, que no es fiable bajo automatización)."""
-    favorites = parsing.parse_favorites(page.content())
+    favorites = parsing.parse_favorites(await page.content())
     diag.step(f"favoritos abierto: {len(favorites)} favoritos disponibles")
     return favorites
 
 
-def select_favorite(page: Page, favorites: list[tuple[str, str]], favorite_name: str, diag: DiagnosticsLogger) -> None:
+async def select_favorite(
+    page: Page, favorites: list[tuple[str, str]], favorite_name: str, diag: DiagnosticsLogger
+) -> None:
     try:
         favorite_id = parsing.find_favorite_id(favorites, favorite_name)
     except (parsing.FavoriteNotFoundError, parsing.AmbiguousFavoriteError) as exc:
@@ -120,13 +129,13 @@ def select_favorite(page: Page, favorites: list[tuple[str, str]], favorite_name:
 
     diag.step(f"favorito seleccionado: id={favorite_id}")
 
-    resp = page.request.post(
+    resp = await page.request.post(
         selectors.FAVORITES_AJAX_URL,
         data=json.dumps({"id_cliente_busqueda": favorite_id}),
         headers={"Content-Type": "application/json"},
         timeout=DEFAULT_PAGE_TIMEOUT_MS,
     )
-    body = resp.json() if resp.ok else {}
+    body = await resp.json() if resp.ok else {}
     if not resp.ok or not body.get("success"):
         raise ElementNotFoundError("No se pudo consultar los parámetros del favorito seleccionado")
 
@@ -141,21 +150,21 @@ def select_favorite(page: Page, favorites: list[tuple[str, str]], favorite_name:
         )
 
     try:
-        with page.expect_navigation(timeout=DEFAULT_PAGE_TIMEOUT_MS):
-            page.evaluate(
+        async with page.expect_navigation(timeout=DEFAULT_PAGE_TIMEOUT_MS):
+            await page.evaluate(
                 "() => {"
                 + build_script
                 + f"document.querySelector({json.dumps(selectors.FAVORITES_FORM_SELECTOR)}).submit();"
                 + "}"
             )
     except PlaywrightTimeoutError as exc:
-        diag.error_screenshot(page, "aplicar_favorito_timeout")
+        await diag.error_screenshot(page, "aplicar_favorito_timeout")
         raise TenderstoolTimeoutError("Timeout aplicando el favorito seleccionado") from exc
 
     diag.step("búsqueda ejecutada (favorito aplicado)")
 
 
-def extract_listing_rows(
+async def extract_listing_rows(
     page: Page,
     search_type: selectors.SearchType,
     max_results: int | None,
@@ -170,9 +179,9 @@ def extract_listing_rows(
     next_selector = selectors.PAGINATION_NEXT_SELECTOR[search_type]
 
     try:
-        page.wait_for_selector(f"#{table_id}", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        await page.wait_for_selector(f"#{table_id}", timeout=DEFAULT_PAGE_TIMEOUT_MS)
     except PlaywrightTimeoutError as exc:
-        diag.error_screenshot(page, "listado_no_encontrado")
+        await diag.error_screenshot(page, "listado_no_encontrado")
         raise ElementNotFoundError("No se ha podido localizar la tabla de resultados") from exc
 
     all_rows: list[dict] = []
@@ -180,7 +189,7 @@ def extract_listing_rows(
     page_number = 1
 
     while True:
-        rows = parse_fn(page.content())
+        rows = parse_fn(await page.content())
         new_rows = [r for r in rows if r["detail_url"] not in seen_urls]
         for r in new_rows:
             seen_urls.add(r["detail_url"])
@@ -193,10 +202,10 @@ def extract_listing_rows(
         if not new_rows and page_number > 1:
             break  # fin real de resultados (página repetida o vacía)
 
-        next_button = page.query_selector(next_selector)
+        next_button = await page.query_selector(next_selector)
         if next_button is None:
             break
-        classes = next_button.get_attribute("class") or ""
+        classes = await next_button.get_attribute("class") or ""
         if selectors.PAGINATION_DISABLED_CLASS in classes:
             break
         if page_number >= MAX_PAGINATION_PAGES:
@@ -205,41 +214,97 @@ def extract_listing_rows(
 
         page_number += 1
         try:
-            next_button.click()
-            page.wait_for_load_state("networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+            await next_button.click()
+            await page.wait_for_load_state("networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
         except PlaywrightTimeoutError as exc:
-            diag.error_screenshot(page, f"paginacion_pagina_{page_number}_timeout")
+            await diag.error_screenshot(page, f"paginacion_pagina_{page_number}_timeout")
             raise TenderstoolTimeoutError(f"Timeout cargando la página {page_number} de resultados") from exc
 
     diag.step(f"resultados detectados: {len(all_rows)} filas totales, {page_number} páginas procesadas")
     return all_rows
 
 
-def extract_detail(context: BrowserContext, detail_url: str, diag: DiagnosticsLogger) -> tuple[dict, str, str]:
+async def extract_detail(
+    context: BrowserContext, detail_url: str, diag: DiagnosticsLogger, semaphore: asyncio.Semaphore
+) -> tuple[dict, str, str]:
     """Devuelve (campos, estado_extraccion, mensaje_error). Nunca lanza: un
     fallo en una ficha concreta se registra en la fila y el proceso continúa
     con la siguiente (requisito explícito del encargo)."""
-    full_url = detail_url if detail_url.startswith("http") else f"{selectors.BASE_URL}/{detail_url}"
-    detail_page = context.new_page()
-    try:
-        detail_page.goto(full_url, wait_until="networkidle", timeout=DEFAULT_DETAIL_TIMEOUT_MS)
-        if parsing.is_platinum_gated(detail_page.url):
-            return {}, "sin acceso (contenido Platinum)", ""
-        fields = parsing.parse_detail(detail_page.content())
-        return fields, "ok", ""
-    except PlaywrightTimeoutError as exc:
-        diag.error_screenshot(detail_page, "detalle_timeout")
-        return {}, "error", f"timeout cargando ficha: {exc}"
-    except Exception as exc:  # noqa: BLE001 - contención deliberada por fila (ver docstring)
-        diag.error_screenshot(detail_page, "detalle_error")
-        return {}, "error", str(exc)
-    finally:
-        detail_page.close()
+    async with semaphore:
+        full_url = detail_url if detail_url.startswith("http") else f"{selectors.BASE_URL}/{detail_url}"
+        detail_page = await context.new_page()
+        try:
+            await detail_page.goto(full_url, wait_until="networkidle", timeout=DEFAULT_DETAIL_TIMEOUT_MS)
+            if parsing.is_platinum_gated(detail_page.url):
+                return {}, "sin acceso (contenido Platinum)", ""
+            fields = parsing.parse_detail(await detail_page.content())
+            return fields, "ok", ""
+        except PlaywrightTimeoutError as exc:
+            await diag.error_screenshot(detail_page, "detalle_timeout")
+            return {}, "error", f"timeout cargando ficha: {exc}"
+        except Exception as exc:  # noqa: BLE001 - contención deliberada por fila (ver docstring)
+            await diag.error_screenshot(detail_page, "detalle_error")
+            return {}, "error", str(exc)
+        finally:
+            await detail_page.close()
 
 
-def run_extraction(params: ExtractionParams) -> ExtractionResult:
+async def extract_all_details(
+    context: BrowserContext,
+    rows: list[dict],
+    diag: DiagnosticsLogger,
+    max_concurrency: int = MAX_DETAIL_CONCURRENCY,
+) -> list[tuple[dict, str, str]]:
+    """Extrae el detalle de todas las filas con concurrencia acotada por
+    semáforo (no ilimitada, para no saturar el sitio real). El progreso se
+    reporta según van completándose, no en el orden original."""
+    semaphore = asyncio.Semaphore(max_concurrency)
+    total = len(rows)
+    completed = 0
+
+    async def _one(index: int, row: dict) -> tuple[int, dict, str, str]:
+        nonlocal completed
+        fields, estado, error_msg = await extract_detail(context, row["detail_url"], diag, semaphore)
+        completed += 1
+        diag.step(f"ficha {completed}/{total} procesada: estado={estado}")
+        return index, fields, estado, error_msg
+
+    tasks = [asyncio.create_task(_one(i, row)) for i, row in enumerate(rows)]
+    results: list[tuple[dict, str, str] | None] = [None] * total
+    for coro in asyncio.as_completed(tasks):
+        index, fields, estado, error_msg = await coro
+        results[index] = (fields, estado, error_msg)
+    return results  # type: ignore[return-value]
+
+
+async def fetch_favorites(
+    username: str, password: str, search_type: selectors.SearchType
+) -> list[str]:
+    """Login ligero solo para poblar el desplegable de favoritos de la
+    pantalla inicial. No hace nada más (ni busca, ni extrae) — sesión propia
+    que se cierra al terminar, no se comparte con la ejecución real."""
+    diag = DiagnosticsLogger(diagnostic_mode=False)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+        try:
+            await login(page, username, password, diag)
+            await go_to_search_type(page, search_type, diag)
+            favorites = await open_favorites(page, diag)
+        finally:
+            await context.close()
+            await browser.close()
+    return [alias for _, alias in favorites]
+
+
+async def run_extraction(
+    params: ExtractionParams,
+    run_id: str,
+    on_step: Callable[[str], None] | None = None,
+) -> ExtractionResult:
     start = time.monotonic()
-    diag = DiagnosticsLogger(diagnostic_mode=params.diagnostic_mode)
+    diag = DiagnosticsLogger(diagnostic_mode=params.diagnostic_mode, run_id=run_id, on_step=on_step)
     diag.step(
         f"ejecución iniciada: tipo={params.search_type.value} favorito={params.favorite_name!r} "
         f"max_results={params.max_results}"
@@ -249,22 +314,22 @@ def run_extraction(params: ExtractionParams) -> ExtractionResult:
     rows: list[dict] = []
     partial_errors = 0
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context()
-        page = context.new_page()
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=headless)
+        context = await browser.new_context()
+        page = await context.new_page()
         try:
-            login(page, params.username, params.password, diag)
-            go_to_search_type(page, params.search_type, diag)
-            favorites = open_favorites(page, diag)
-            select_favorite(page, favorites, params.favorite_name, diag)
-            listing_rows = extract_listing_rows(page, params.search_type, params.max_results, diag)
+            await login(page, params.username, params.password, diag)
+            await go_to_search_type(page, params.search_type, diag)
+            favorites = await open_favorites(page, diag)
+            await select_favorite(page, favorites, params.favorite_name, diag)
+            listing_rows = await extract_listing_rows(page, params.search_type, params.max_results, diag)
 
-            for i, row in enumerate(listing_rows, start=1):
-                fields, estado, error_msg = extract_detail(context, row["detail_url"], diag)
+            detail_results = await extract_all_details(context, listing_rows, diag)
+
+            for row, (fields, estado, error_msg) in zip(listing_rows, detail_results):
                 if estado == "error":
                     partial_errors += 1
-                diag.step(f"ficha {i}/{len(listing_rows)} procesada: estado={estado}")
 
                 record = {
                     "tipo_busqueda": params.search_type.value,
@@ -291,8 +356,8 @@ def run_extraction(params: ExtractionParams) -> ExtractionResult:
 
             diag.step("Excel generado: iniciando construcción")
         finally:
-            context.close()
-            browser.close()
+            await context.close()
+            await browser.close()
 
     excel_path = excel_exporter.build_excel(rows, params.search_type.value, params.favorite_name)
     duration = time.monotonic() - start
@@ -306,5 +371,5 @@ def run_extraction(params: ExtractionParams) -> ExtractionResult:
         partial_error_count=partial_errors,
         duration_seconds=duration,
         excel_path=excel_path,
-        run_id=diag.run_id,
+        run_id=run_id,
     )

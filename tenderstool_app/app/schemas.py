@@ -26,3 +26,16 @@ class ExtractionRequest(BaseModel):
         if value is not None and value <= 0:
             raise ValueError("debe ser un entero positivo")
         return value
+
+
+class FavoritesRequest(BaseModel):
+    username: str
+    password: str
+    search_type: SearchType
+
+    @field_validator("username", "password")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("no puede estar vacío")
+        return value.strip()

@@ -25,4 +25,5 @@ python-dotenv
 # --- testing ---
 pytest
 pytest-mock
+pytest-asyncio
 httpx

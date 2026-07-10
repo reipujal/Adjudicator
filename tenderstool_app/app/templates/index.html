@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>TendersTool Automation</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/favorites.js" defer></script>
 </head>
 <body>
   <main class="container">
@@ -14,15 +15,15 @@
     <div class="alert alert-error">{{ error }}</div>
     {% endif %}
 
-    <form method="post" action="/ejecutar" class="form">
+    <form method="post" action="/ejecutar" class="form" id="extraction-form">
       <label>
         Usuario TendersTool
-        <input type="text" name="username" required autocomplete="username">
+        <input type="text" name="username" id="username" required autocomplete="username">
       </label>
 
       <label>
         Password TendersTool
-        <input type="password" name="password" required autocomplete="current-password">
+        <input type="password" name="password" id="password" required autocomplete="current-password">
       </label>
 
       <fieldset>
@@ -37,9 +38,16 @@
         </label>
       </fieldset>
 
+      <div class="favorites-row">
+        <button type="button" id="load-favorites-btn">Buscar favoritos</button>
+      </div>
+      <p id="favorites-error" class="alert alert-error" style="display:none;"></p>
+
       <label>
-        Nombre del favorito
-        <input type="text" name="favorite_name" required placeholder="Ej: SAP &gt; 1M">
+        Favorito
+        <select name="favorite_name" id="favorite_select" disabled required>
+          <option value="">— Carga primero los favoritos —</option>
+        </select>
       </label>
 
       <label>
@@ -52,10 +60,11 @@
         Modo diagnóstico / modo fallos
       </label>
 
-      <button type="submit">Ejecutar extracción</button>
+      <button type="submit" id="submit-btn" disabled>Ejecutar extracción</button>
     </form>
 
-    <p class="note">La contraseña no se almacena en ningún momento: se usa solo en memoria durante esta ejecución.</p>
+    <p class="note">La contraseña no se almacena en ningún momento: se usa solo en memoria durante esta ejecución
+      (ni siquiera al cargar la lista de favoritos: esa consulta abre y cierra su propia sesión).</p>
   </main>
 </body>
 </html>
