@@ -85,14 +85,11 @@ PLATINUM_GATE_URL_MARKER = "registro.php"
 # vacío (comportamiento esperado, no falla el proceso) hasta que se actualice
 # este mapa.
 DETAIL_FIELD_LABELS = {
-    "Importe licitación": "importe_licitacion",
     "Importe adjudicación vs licitación": "importe_adjudicacion_vs_licitacion",
     "Número de expediente": "numero_expediente",
-    "Estado": "estado",
     "Tipo de procedimiento": "tipo_procedimiento",
-    "Tipo de tramitación": "tipo_tramitacion",
-    "Clasificación CPV": "clasificacion_cpv",
-    "Mercado vertical": "mercado_vertical",
+    "Fecha de vencimiento del contrato": "fecha_vencimiento",
+    "Fecha de vencimiento": "fecha_vencimiento",
     "Provincia": "provincia",
     "Comunidad autónoma": "comunidad_autonoma",
     "Criterios de adjudicación": "criterios_adjudicacion",

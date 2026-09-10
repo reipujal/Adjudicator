@@ -10,10 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from io import BytesIO
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+from zipfile import BadZipFile, ZipFile
 
 from playwright.async_api import (
     BrowserContext,
@@ -22,7 +23,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from . import excel_exporter, parsing, selectors
+from . import contract_ai_extractor, excel_exporter, parsing, selectors
 from .diagnostics import DiagnosticsLogger, resolve_headless
 
 DEFAULT_PAGE_TIMEOUT_MS = 30_000
@@ -30,6 +31,32 @@ DEFAULT_DETAIL_TIMEOUT_MS = 20_000
 MAX_PAGINATION_PAGES = 200  # cinturón de seguridad anti bucle infinito
 MAX_DETAIL_CONCURRENCY = 4  # fichas en paralelo; acotado a propósito para no
 # machacar el sitio real con demasiadas pestañas simultáneas
+
+CONTRACT_FIELD_KEYS = {
+    "fecha_inicio_contrato",
+    "fecha_inicio_origen",
+    "fecha_fin_contrato",
+    "fecha_fin_origen",
+    "fecha_vencimiento",
+    "fecha_vencimiento_origen",
+    "prorrogable_hasta",
+    "prorrogable_hasta_origen",
+    "duracion_contrato",
+    "numero_maximo_prorrogas",
+    "duracion_prorroga",
+    "solvencia",
+}
+
+DOCUMENT_LABELS = {
+    "anuncio_licitacion": "Anuncio de licitación",
+    "prescripciones_tecnicas": "Prescripciones técnicas",
+    "clausulas_administrativas": "Cláusulas administrativas",
+}
+
+try:
+    import pdfplumber
+except ImportError:  # pragma: no cover - depende del entorno de ejecución
+    pdfplumber = None
 
 
 class LoginError(Exception):
@@ -71,6 +98,19 @@ class ExtractionResult:
     run_id: str
 
 
+@dataclass
+class DocumentTextCache:
+    texts: dict[str, "DocumentText"]
+    in_flight: dict[str, asyncio.Task["DocumentText"]]
+    lock: asyncio.Lock
+
+
+@dataclass
+class DocumentText:
+    text: str
+    pages: list[str]
+
+
 async def accept_cookies_if_present(page: Page) -> None:
     try:
         await page.click(selectors.COOKIE_ACCEPT_SELECTOR, timeout=3000)
@@ -88,8 +128,7 @@ async def login(page: Page, username: str, password: str, diag: DiagnosticsLogge
             await page.goto(selectors.LOGIN_URL, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
         await page.fill(selectors.USERNAME_SELECTOR, username, timeout=DEFAULT_PAGE_TIMEOUT_MS)
         await page.fill(selectors.PASSWORD_SELECTOR, password, timeout=DEFAULT_PAGE_TIMEOUT_MS)
-        async with page.expect_navigation(timeout=DEFAULT_PAGE_TIMEOUT_MS):
-            await page.click(selectors.SUBMIT_SELECTOR)
+        await submit_login_form(page)
     except PlaywrightTimeoutError as exc:
         await diag.error_screenshot(page, "login_timeout")
         raise TenderstoolTimeoutError("Timeout durante el login") from exc
@@ -99,6 +138,30 @@ async def login(page: Page, username: str, password: str, diag: DiagnosticsLogge
         raise LoginError("usr/pwd incorrectos")
 
     diag.step("login correcto")
+
+
+async def submit_login_form(page: Page) -> None:
+    """Envía el login tolerando portales que no emiten navegación detectable.
+
+    En vivo se ha observado que el submit a veces termina correctamente, pero
+    Playwright no recibe el evento de navegación esperado. En ese caso se
+    valida por URL/carga posterior antes de declarar timeout.
+    """
+    try:
+        async with page.expect_navigation(timeout=DEFAULT_PAGE_TIMEOUT_MS):
+            await page.click(selectors.SUBMIT_SELECTOR)
+    except PlaywrightTimeoutError:
+        if selectors.LOGIN_URL_MARKER not in page.url:
+            await page.wait_for_load_state("networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+            return
+        try:
+            await page.wait_for_url(
+                lambda url: selectors.LOGIN_URL_MARKER not in url,
+                timeout=5_000,
+            )
+            await page.wait_for_load_state("networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        except PlaywrightTimeoutError:
+            raise
 
 
 async def go_to_search_type(page: Page, search_type: selectors.SearchType, diag: DiagnosticsLogger) -> None:
@@ -225,19 +288,38 @@ async def extract_listing_rows(
 
 
 async def extract_detail(
-    context: BrowserContext, detail_url: str, diag: DiagnosticsLogger, semaphore: asyncio.Semaphore
+    context: BrowserContext,
+    row: dict,
+    diag: DiagnosticsLogger,
+    semaphore: asyncio.Semaphore,
+    document_cache: DocumentTextCache,
 ) -> tuple[dict, str, str]:
     """Devuelve (campos, estado_extraccion, mensaje_error). Nunca lanza: un
     fallo en una ficha concreta se registra en la fila y el proceso continúa
     con la siguiente (requisito explícito del encargo)."""
     async with semaphore:
+        detail_url = row["detail_url"]
         full_url = detail_url if detail_url.startswith("http") else f"{selectors.BASE_URL}/{detail_url}"
         detail_page = await context.new_page()
         try:
             await detail_page.goto(full_url, wait_until="networkidle", timeout=DEFAULT_DETAIL_TIMEOUT_MS)
             if parsing.is_platinum_gated(detail_page.url):
                 return {}, "sin acceso (contenido Platinum)", ""
-            fields = parsing.parse_detail(await detail_page.content())
+            detail_html = await detail_page.content()
+            fields = parsing.parse_detail(detail_html)
+            pdf_fields = await extract_contract_fields_from_documents(
+                detail_page,
+                detail_html,
+                reference_dates=[
+                    parsing.normalize_date(row.get("fecha", "")),
+                    parsing.normalize_date(row.get("limite_ofertas", "")),
+                    parsing.normalize_date(row.get("fecha_adjudicacion", "")),
+                    parsing.normalize_date(row.get("fecha_vencimiento", "")),
+                ],
+                diag=diag,
+                document_cache=document_cache,
+            )
+            _merge_contract_fields_from_primary_source(fields, pdf_fields)
             return fields, "ok", ""
         except PlaywrightTimeoutError as exc:
             await diag.error_screenshot(detail_page, "detalle_timeout")
@@ -247,6 +329,159 @@ async def extract_detail(
             return {}, "error", str(exc)
         finally:
             await detail_page.close()
+
+
+def _merge_prefer_existing(target: dict, source: dict) -> None:
+    for key, value in source.items():
+        if value in ("", None, "null"):
+            continue
+        if target.get(key) in ("", None):
+            target[key] = value
+
+
+def _merge_contract_fields_from_primary_source(target: dict, source: dict) -> None:
+    """PDF/documentos contractuales prevalecen sobre el HTML visible."""
+    for key, value in source.items():
+        if value in ("", None, "null"):
+            continue
+        if target.get(key) in ("", None) or key in CONTRACT_FIELD_KEYS:
+            target[key] = value
+
+
+def _merge_contract_fields_without_overwrite(target: dict, source: dict) -> None:
+    """Mantiene el orden de prioridad documental: anuncio > PPT > PCAP."""
+    for key, value in source.items():
+        if value in ("", None, "null"):
+            continue
+        if target.get(key) in ("", None, "null"):
+            target[key] = value
+
+
+def _document_name(label: str) -> str:
+    return DOCUMENT_LABELS.get(label, label.replace("_", " "))
+
+
+def _extract_document_text_sync(document_bytes: bytes) -> DocumentText:
+    if document_bytes.startswith(b"PK"):
+        try:
+            with ZipFile(BytesIO(document_bytes)) as archive:
+                chunks = []
+                for name in archive.namelist():
+                    if name.lower().endswith((".xml", ".txt", ".html", ".htm")):
+                        chunks.append(archive.read(name).decode("utf-8", errors="ignore"))
+                return DocumentText(text="\n".join(chunks), pages=[])
+        except BadZipFile:
+            text = document_bytes.decode("utf-8", errors="ignore")
+            return DocumentText(text=text, pages=[])
+    if not document_bytes.startswith(b"%PDF"):
+        text = document_bytes.decode("utf-8", errors="ignore")
+        return DocumentText(text=text, pages=[text])
+    if pdfplumber is None:
+        return DocumentText(text="", pages=[])
+    with pdfplumber.open(BytesIO(document_bytes)) as pdf:
+        pages = [page.extract_text() or "" for page in pdf.pages]
+        return DocumentText(text="\n".join(pages), pages=pages)
+
+
+def _extract_pdf_text_sync(pdf_bytes: bytes) -> str:
+    return _extract_document_text_sync(pdf_bytes).text
+
+
+async def extract_contract_fields_from_documents(
+    page: Page,
+    detail_html: str,
+    reference_dates: list[str],
+    diag: DiagnosticsLogger,
+    document_cache: DocumentTextCache | None = None,
+) -> dict:
+    if pdfplumber is None:
+        diag.step("pdfplumber no instalado: se omite extracción contractual desde PDF")
+        return {}
+
+    ai_pages: list[contract_ai_extractor.DocumentPage] = []
+    for label, url in parsing.parse_contract_document_urls(detail_html):
+        try:
+            document_text = await _get_document_text(
+                page,
+                url,
+                label,
+                diag,
+                document_cache=document_cache,
+            )
+        except Exception as exc:  # noqa: BLE001 - un PDF concreto no debe tumbar la ficha
+            diag.step(f"documento contractual no procesado: {label} error={exc}")
+            continue
+        if not document_text.text:
+            continue
+
+        document_name = _document_name(label)
+        for page_number, page_text in enumerate(document_text.pages, start=1):
+            ai_pages.append(
+                contract_ai_extractor.DocumentPage(
+                    document_name=document_name,
+                    page_number=page_number,
+                    text=page_text,
+                )
+            )
+
+    if not ai_pages:
+        return {}
+
+    try:
+        fields = await asyncio.to_thread(contract_ai_extractor.extract_contract_fields_from_pages, ai_pages)
+    except contract_ai_extractor.ContractAIUnavailableError as exc:
+        diag.step(f"extracción contractual IA omitida: {exc}")
+        return {}
+    except Exception as exc:  # noqa: BLE001 - un fallo IA no debe tumbar una ficha concreta
+        diag.step(f"extracción contractual IA fallida: {exc}")
+        return {}
+
+    if any(fields.get(key) for key in ("duracion_contrato", "fecha_inicio_contrato", "fecha_fin_contrato")):
+        diag.step("datos contractuales extraídos mediante IA")
+    return fields
+
+
+async def _get_document_text(
+    page: Page,
+    url: str,
+    label: str,
+    diag: DiagnosticsLogger,
+    document_cache: DocumentTextCache | None = None,
+) -> DocumentText:
+    if document_cache is None:
+        return await _download_document_text(page, url, label, diag)
+
+    owner = False
+    async with document_cache.lock:
+        if url in document_cache.texts:
+            diag.step(f"documento contractual reutilizado desde caché: {label}")
+            return document_cache.texts[url]
+        task = document_cache.in_flight.get(url)
+        if task is None:
+            task = asyncio.create_task(_download_document_text(page, url, label, diag))
+            document_cache.in_flight[url] = task
+            owner = True
+
+    try:
+        text = await task
+    finally:
+        if owner:
+            async with document_cache.lock:
+                document_cache.in_flight.pop(url, None)
+    if owner:
+        async with document_cache.lock:
+            document_cache.texts[url] = text
+    elif text.text:
+        diag.step(f"documento contractual reutilizado desde caché: {label}")
+    return text
+
+
+async def _download_document_text(page: Page, url: str, label: str, diag: DiagnosticsLogger) -> DocumentText:
+    response = await page.request.get(url, timeout=DEFAULT_DETAIL_TIMEOUT_MS)
+    if not response.ok:
+        diag.step(f"documento contractual no descargado: {label} status={response.status}")
+        return DocumentText(text="", pages=[])
+    return await asyncio.to_thread(_extract_document_text_sync, await response.body())
 
 
 async def extract_all_details(
@@ -259,12 +494,19 @@ async def extract_all_details(
     semáforo (no ilimitada, para no saturar el sitio real). El progreso se
     reporta según van completándose, no en el orden original."""
     semaphore = asyncio.Semaphore(max_concurrency)
+    document_cache = DocumentTextCache(texts={}, in_flight={}, lock=asyncio.Lock())
     total = len(rows)
     completed = 0
 
     async def _one(index: int, row: dict) -> tuple[int, dict, str, str]:
         nonlocal completed
-        fields, estado, error_msg = await extract_detail(context, row["detail_url"], diag, semaphore)
+        fields, estado, error_msg = await extract_detail(
+            context,
+            row,
+            diag,
+            semaphore,
+            document_cache,
+        )
         completed += 1
         diag.step(f"ficha {completed}/{total} procesada: estado={estado}")
         return index, fields, estado, error_msg
@@ -334,24 +576,27 @@ async def run_extraction(
                 record = {
                     "tipo_busqueda": params.search_type.value,
                     "favorito": params.favorite_name,
-                    "detail_url": row.get("detail_url", ""),
                     "titulo": row.get("titulo", ""),
                     "importe": row.get("importe", ""),
-                    "extraido_en": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    "estado_extraccion": estado,
-                    "error_extraccion": error_msg,
+                    "fecha_inicio_origen": "null",
+                    "fecha_fin_origen": "null",
+                    "fecha_vencimiento_origen": "null",
+                    "prorrogable_hasta_origen": "null",
                 }
                 if params.search_type == selectors.SearchType.LICITACIONES:
-                    record["fecha"] = row.get("fecha", "")
-                    record["fecha_normalizada"] = excel_exporter.normalize_date(row.get("fecha", ""))
-                    record["limite_ofertas"] = row.get("limite_ofertas", "")
+                    record["limite_ofertas"] = fields.get("limite_ofertas", "")
                 else:
-                    record["fecha"] = row.get("fecha_adjudicacion", "")
-                    record["fecha_normalizada"] = excel_exporter.normalize_date(row.get("fecha_adjudicacion", ""))
-                    record["limite_ofertas"] = row.get("fecha_adjudicacion", "")
-                    record["fecha_vencimiento"] = row.get("fecha_vencimiento", "")
-                    record["prorrogable_hasta"] = row.get("prorrogable_hasta", "")
+                    record["limite_ofertas"] = fields.get("fecha_adjudicacion", "")
+                    record["fecha_vencimiento"] = fields.get("fecha_vencimiento", "")
+                    record["prorrogable_hasta"] = fields.get("prorrogable_hasta", "")
                 record.update(fields)
+                record["tecnologia"] = parsing.infer_technology(
+                    params.favorite_name,
+                    row.get("titulo", ""),
+                    fields.get("numero_expediente", ""),
+                    fields.get("criterios_adjudicacion", ""),
+                    fields.get("fuente_informacion", ""),
+                )
                 rows.append(record)
 
             diag.step("Excel generado: iniciando construcción")

@@ -18,9 +18,12 @@ lxml
 # --- datos y exportación ---
 pandas
 openpyxl
+pdfplumber
 
 # --- configuración ---
 python-dotenv
+openai
+python-dateutil
 
 # --- testing ---
 pytest

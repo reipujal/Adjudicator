@@ -50,12 +50,14 @@ el formulario en cada ejecución — la aplicación nunca la guarda.
 
 ## Variables de entorno
 
-Ninguna es obligatoria para el uso normal (usuario y password de TendersTool
-se envían por el formulario, no por entorno). Opcional:
+El usuario y password de TendersTool se envían por el formulario, no por
+entorno. Para que la aplicación rellene campos contractuales desde pliegos
+mediante IA, configura una clave de OpenAI:
 
 | Variable | Uso | Por defecto |
 |---|---|---|
-| — | (reservado para futura configuración de timeouts/URL base) | — |
+| `OPENAI_API_KEY` | Activa la lectura IA de documentos contractuales. Si falta, esos campos quedan vacíos. | — |
+| `TENDERSTOOL_AI_MODEL` | Modelo usado para extraer datos con salida JSON estricta. | `gpt-5-mini` |
 
 ## Progreso en vivo y concurrencia
 

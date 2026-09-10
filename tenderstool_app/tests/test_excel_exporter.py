@@ -54,10 +54,8 @@ def test_build_excel_partial_errors_are_preserved_in_their_row(tmp_path):
     wb = openpyxl.load_workbook(path)
     ws = wb["Resultados"]
     header = [cell.value for cell in ws[1]]
-    error_col = header.index("Mensaje de error del registro") + 1
-    errors = [ws.cell(row=r, column=error_col).value for r in range(2, ws.max_row + 1)]
-    assert "" in errors or None in errors
-    assert "timeout cargando ficha" in errors
+    assert "Estado de extracción del registro" not in header
+    assert "Mensaje de error del registro" not in header
 
 
 def test_build_excel_header_frozen_and_autofiltered(tmp_path):
@@ -75,6 +73,62 @@ def test_build_excel_empty_results_still_creates_file_with_headers(tmp_path):
     ws = wb["Resultados"]
     assert ws.max_row == 1  # solo cabecera
     assert ws.cell(row=1, column=1).value == "Tipo de búsqueda"
+    header = [cell.value for cell in ws[1]]
+    assert "Duración del contrato" in header
+    assert "Solvencia" in header
+
+
+def test_build_excel_final_columns_match_requested_contract(tmp_path):
+    path = excel_exporter.build_excel([], "licitaciones", "Filtro", output_dir=tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Resultados"]
+    assert [cell.value for cell in ws[1]] == [
+        "Tipo de búsqueda",
+        "Favorito usado",
+        "Límite ofertas / Fecha adjudicación",
+        "Fecha inicio contrato",
+        "Origen fecha inicio",
+        "Documento fecha inicio",
+        "Página fecha inicio",
+        "Fecha fin contrato",
+        "Origen fecha fin",
+        "Cálculo fecha fin",
+        "Documento fecha fin",
+        "Página fecha fin",
+        "Fecha de vencimiento",
+        "Origen fecha de vencimiento",
+        "Cálculo fecha de vencimiento",
+        "Documento fecha de vencimiento",
+        "Página fecha de vencimiento",
+        "Prorrogable hasta",
+        "Origen prorrogable hasta",
+        "Cálculo prorrogable hasta",
+        "Documento prorrogable hasta",
+        "Página prorrogable hasta",
+        "Título",
+        "Tecnología",
+        "Órgano de contratación (Organismo licitador)",
+        "Importe",
+        "Importe adjudicación vs licitación",
+        "Número de expediente",
+        "Tipo de procedimiento",
+        "Provincia",
+        "Comunidad autónoma",
+        "Criterios de adjudicación",
+        "Fuente de información",
+        "Duración del contrato",
+        "Documento duración del contrato",
+        "Página duración del contrato",
+        "Número máximo de prórrogas",
+        "Documento número máximo de prórrogas",
+        "Página número máximo de prórrogas",
+        "Duración prórroga",
+        "Documento duración prórroga",
+        "Página duración prórroga",
+        "Solvencia",
+        "Documento solvencia",
+        "Página solvencia",
+    ]
 
 
 def test_build_excel_filename_matches_expected_pattern(tmp_path):
