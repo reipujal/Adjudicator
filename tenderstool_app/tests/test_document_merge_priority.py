@@ -100,6 +100,7 @@ async def test_contract_fields_are_extracted_by_ai_with_document_pages(monkeypat
     fields = await tenderstool_client.extract_contract_fields_from_documents(
         page=None,
         detail_html=detail_html,
+        source_url="",
         reference_dates=[],
         diag=DummyDiag(),
     )

@@ -95,3 +95,22 @@ def test_contract_ai_recomputes_model_calculated_end_date():
     assert flattened["fecha_vencimiento_origen"] == "calculated"
     assert flattened["fecha_fin_documento"] == "PCAP.pdf"
     assert flattened["fecha_fin_pagina"] == 5
+
+
+def test_contract_ai_normalizes_document_marker_returned_by_model():
+    data = {
+        key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+        for key in contract_ai_extractor.FIELD_KEYS
+    }
+    data["duracion_contrato"] = {
+        "value": "2 anos",
+        "document": "DOCUMENTO: Anuncio de licitacion | PAGINA: 4",
+        "page": 4,
+        "origin": "explicit",
+        "calculation": None,
+    }
+
+    flattened = contract_ai_extractor._flatten_response(data)
+
+    assert flattened["duracion_contrato_documento"] == "Anuncio de licitacion"
+    assert flattened["duracion_contrato_pagina"] == 4

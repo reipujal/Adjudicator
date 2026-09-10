@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -198,7 +199,7 @@ def _flatten_response(data: dict[str, Any]) -> dict[str, Any]:
         if origin_key := ORIGIN_KEYS.get(field):
             flattened[origin_key] = origin if origin in {"explicit", "calculated"} else "explicit"
         document_key, page_key = PROVENANCE_KEYS[field]
-        flattened[document_key] = document
+        flattened[document_key] = _normalize_document_name(str(document))
         flattened[page_key] = page
         if calculation_key := CALCULATION_KEYS.get(field):
             if calculation := item.get("calculation"):
@@ -245,6 +246,15 @@ def _parse_iso_date(value: str) -> date | None:
         return date.fromisoformat(str(value))
     except ValueError:
         return None
+
+
+def _normalize_document_name(value: str) -> str:
+    document = value.strip().strip("[]")
+    match = re.search(r"DOCUMENTO:\s*(.*?)(?:\s*\|\s*PAGINA:.*)?$", document, re.IGNORECASE)
+    if match:
+        document = match.group(1)
+    document = re.sub(r"\s*\|\s*PAGINA:.*$", "", document, flags=re.IGNORECASE)
+    return document.strip()
 
 
 def _parse_duration_label(value: str) -> tuple[int, str] | None:

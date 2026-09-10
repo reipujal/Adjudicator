@@ -310,6 +310,7 @@ async def extract_detail(
             pdf_fields = await extract_contract_fields_from_documents(
                 detail_page,
                 detail_html,
+                source_url=fields.get("fuente_informacion", ""),
                 reference_dates=[
                     parsing.normalize_date(row.get("fecha", "")),
                     parsing.normalize_date(row.get("limite_ofertas", "")),
@@ -390,6 +391,7 @@ def _extract_pdf_text_sync(pdf_bytes: bytes) -> str:
 async def extract_contract_fields_from_documents(
     page: Page,
     detail_html: str,
+    source_url: str,
     reference_dates: list[str],
     diag: DiagnosticsLogger,
     document_cache: DocumentTextCache | None = None,
@@ -424,6 +426,11 @@ async def extract_contract_fields_from_documents(
                 )
             )
 
+    used_source_fallback = False
+    if not ai_pages and "contractaciopublica.cat" in source_url:
+        ai_pages.extend(await _extract_contractaciopublica_source_pages(page, source_url, diag))
+        used_source_fallback = True
+
     if not ai_pages:
         return {}
 
@@ -435,6 +442,18 @@ async def extract_contract_fields_from_documents(
     except Exception as exc:  # noqa: BLE001 - un fallo IA no debe tumbar una ficha concreta
         diag.step(f"extracción contractual IA fallida: {exc}")
         return {}
+
+    if not fields and not used_source_fallback and "contractaciopublica.cat" in source_url:
+        source_pages = await _extract_contractaciopublica_source_pages(page, source_url, diag)
+        if source_pages:
+            try:
+                fields = await asyncio.to_thread(
+                    contract_ai_extractor.extract_contract_fields_from_pages,
+                    source_pages,
+                )
+            except Exception as exc:  # noqa: BLE001 - fallback best effort
+                diag.step(f"extraccion contractual IA desde fuente publica fallida: {exc}")
+                return {}
 
     if any(fields.get(key) for key in ("duracion_contrato", "fecha_inicio_contrato", "fecha_fin_contrato")):
         diag.step("datos contractuales extraídos mediante IA")
@@ -482,6 +501,64 @@ async def _download_document_text(page: Page, url: str, label: str, diag: Diagno
         diag.step(f"documento contractual no descargado: {label} status={response.status}")
         return DocumentText(text="", pages=[])
     return await asyncio.to_thread(_extract_document_text_sync, await response.body())
+
+
+async def _extract_contractaciopublica_source_pages(
+    page: Page,
+    source_url: str,
+    diag: DiagnosticsLogger,
+) -> list[contract_ai_extractor.DocumentPage]:
+    source_page = await page.context.new_page()
+    pages: list[contract_ai_extractor.DocumentPage] = []
+    try:
+        await source_page.goto(source_url, wait_until="networkidle", timeout=DEFAULT_PAGE_TIMEOUT_MS)
+        buttons = source_page.locator("button")
+        count = await buttons.count()
+        for index in range(count):
+            button = buttons.nth(index)
+            label = " ".join((await button.inner_text(timeout=1000)).split())
+            if not _is_contractaciopublica_contract_document(label):
+                continue
+            try:
+                async with source_page.expect_download(timeout=DEFAULT_DETAIL_TIMEOUT_MS) as download_info:
+                    await button.click(timeout=DEFAULT_DETAIL_TIMEOUT_MS)
+                download = await download_info.value
+                path = await download.path()
+                if path is None:
+                    continue
+                document_text = await asyncio.to_thread(Path(path).read_bytes)
+                parsed_text = await asyncio.to_thread(_extract_document_text_sync, document_text)
+            except Exception as exc:  # noqa: BLE001 - fallback best effort por documento
+                diag.step(f"documento fuente publica no procesado: {label} error={exc}")
+                continue
+            for page_number, page_text in enumerate(parsed_text.pages, start=1):
+                pages.append(
+                    contract_ai_extractor.DocumentPage(
+                        document_name=label,
+                        page_number=page_number,
+                        text=page_text,
+                    )
+                )
+        if pages:
+            diag.step(f"documentos contractuales recuperados desde fuente publica: {source_url}")
+    finally:
+        await source_page.close()
+    return pages
+
+
+def _is_contractaciopublica_contract_document(label: str) -> bool:
+    normalized = label.casefold()
+    return normalized.endswith(".pdf") and any(
+        marker in normalized
+        for marker in [
+            "pca",
+            "pcap",
+            "ppt",
+            "plec",
+            "claus",
+            "prescrip",
+        ]
+    )
 
 
 async def extract_all_details(
