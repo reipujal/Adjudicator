@@ -58,6 +58,9 @@ mediante IA, configura una clave de OpenAI:
 |---|---|---|
 | `OPENAI_API_KEY` | Activa la lectura IA de documentos contractuales. Si falta, esos campos quedan vacíos. | — |
 | `TENDERSTOOL_AI_MODEL` | Modelo usado para extraer datos con salida JSON estricta. | `gpt-5-mini` |
+| `TENDERSTOOL_AI_TIMEOUT_SECONDS` | Timeout por llamada a OpenAI durante lectura de pliegos. | `90` |
+| `TENDERSTOOL_AI_MAX_RETRIES` | Reintentos del SDK de OpenAI ante errores transitorios/timeouts. | `2` |
+| `TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES` | Reintentos por documento contractual ante timeout/EOF/red. | `2` |
 
 ## Progreso en vivo y concurrencia
 

@@ -42,6 +42,17 @@ def test_contract_document_merge_overrides_visible_html_contract_fields():
     assert target["numero_expediente"] == "EXP-1"
 
 
+def test_document_download_retry_env_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", "bad")
+    assert tenderstool_client._env_positive_int("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", 2) == 2
+
+    monkeypatch.setenv("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", "-1")
+    assert tenderstool_client._env_positive_int("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", 2) == 2
+
+    monkeypatch.setenv("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", "4")
+    assert tenderstool_client._env_positive_int("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", 2) == 4
+
+
 async def test_document_text_cache_reuses_concurrent_same_url(monkeypatch):
     calls = 0
 

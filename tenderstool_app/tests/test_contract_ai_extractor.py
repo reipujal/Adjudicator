@@ -114,3 +114,14 @@ def test_contract_ai_normalizes_document_marker_returned_by_model():
 
     assert flattened["duracion_contrato_documento"] == "Anuncio de licitacion"
     assert flattened["duracion_contrato_pagina"] == 4
+
+
+def test_contract_ai_timeout_env_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("TENDERSTOOL_AI_TIMEOUT_SECONDS", "nope")
+    assert contract_ai_extractor._env_positive_int("TENDERSTOOL_AI_TIMEOUT_SECONDS", 90) == 90
+
+    monkeypatch.setenv("TENDERSTOOL_AI_TIMEOUT_SECONDS", "0")
+    assert contract_ai_extractor._env_positive_int("TENDERSTOOL_AI_TIMEOUT_SECONDS", 90) == 90
+
+    monkeypatch.setenv("TENDERSTOOL_AI_TIMEOUT_SECONDS", "120")
+    assert contract_ai_extractor._env_positive_int("TENDERSTOOL_AI_TIMEOUT_SECONDS", 90) == 120

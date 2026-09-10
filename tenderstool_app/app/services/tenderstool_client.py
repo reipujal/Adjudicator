@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from io import BytesIO
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from .diagnostics import DiagnosticsLogger, resolve_headless
 
 DEFAULT_PAGE_TIMEOUT_MS = 30_000
 DEFAULT_DETAIL_TIMEOUT_MS = 20_000
+DEFAULT_DOCUMENT_DOWNLOAD_RETRIES = 2
 MAX_PAGINATION_PAGES = 200  # cinturón de seguridad anti bucle infinito
 MAX_DETAIL_CONCURRENCY = 4  # fichas en paralelo; acotado a propósito para no
 # machacar el sitio real con demasiadas pestañas simultáneas
@@ -435,6 +437,7 @@ async def extract_contract_fields_from_documents(
         return {}
 
     try:
+        diag.step(f"extraccion contractual IA iniciada: paginas={len(ai_pages)}")
         fields = await asyncio.to_thread(contract_ai_extractor.extract_contract_fields_from_pages, ai_pages)
     except contract_ai_extractor.ContractAIUnavailableError as exc:
         diag.step(f"extracción contractual IA omitida: {exc}")
@@ -447,6 +450,7 @@ async def extract_contract_fields_from_documents(
         source_pages = await _extract_contractaciopublica_source_pages(page, source_url, diag)
         if source_pages:
             try:
+                diag.step(f"extraccion contractual IA desde fuente publica iniciada: paginas={len(source_pages)}")
                 fields = await asyncio.to_thread(
                     contract_ai_extractor.extract_contract_fields_from_pages,
                     source_pages,
@@ -496,11 +500,30 @@ async def _get_document_text(
 
 
 async def _download_document_text(page: Page, url: str, label: str, diag: DiagnosticsLogger) -> DocumentText:
-    response = await page.request.get(url, timeout=DEFAULT_DETAIL_TIMEOUT_MS)
-    if not response.ok:
-        diag.step(f"documento contractual no descargado: {label} status={response.status}")
-        return DocumentText(text="", pages=[])
-    return await asyncio.to_thread(_extract_document_text_sync, await response.body())
+    max_retries = _env_positive_int("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", DEFAULT_DOCUMENT_DOWNLOAD_RETRIES)
+    last_error = ""
+    for attempt in range(max_retries + 1):
+        try:
+            response = await page.request.get(url, timeout=DEFAULT_DETAIL_TIMEOUT_MS)
+            if not response.ok:
+                diag.step(f"documento contractual no descargado: {label} status={response.status}")
+                return DocumentText(text="", pages=[])
+            return await asyncio.to_thread(_extract_document_text_sync, await response.body())
+        except Exception as exc:  # noqa: BLE001 - transient network/PDF failures are retried per document
+            last_error = str(exc)
+            if attempt >= max_retries:
+                raise
+            diag.step(f"reintento descarga documento contractual: {label} intento={attempt + 2}")
+            await asyncio.sleep(min(2**attempt, 8))
+    raise ElementNotFoundError(f"No se pudo descargar documento {label}: {last_error}")
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 async def _extract_contractaciopublica_source_pages(

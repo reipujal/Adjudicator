@@ -22,6 +22,8 @@ load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 DEFAULT_MODEL = "gpt-5-mini"
+DEFAULT_AI_TIMEOUT_SECONDS = 90
+DEFAULT_AI_MAX_RETRIES = 2
 MAX_PAGE_CHARS = 6000
 MAX_TOTAL_CHARS = 90000
 
@@ -126,7 +128,11 @@ def _call_model(document_text: str, *, model: str, api_key: str) -> dict[str, An
     except ImportError as exc:  # pragma: no cover - depende del entorno
         raise ContractAIUnavailableError("paquete openai no instalado") from exc
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(
+        api_key=api_key,
+        timeout=_env_positive_int("TENDERSTOOL_AI_TIMEOUT_SECONDS", DEFAULT_AI_TIMEOUT_SECONDS),
+        max_retries=_env_positive_int("TENDERSTOOL_AI_MAX_RETRIES", DEFAULT_AI_MAX_RETRIES),
+    )
     response = client.responses.create(
         model=model,
         input=[
@@ -157,6 +163,14 @@ def _call_model(document_text: str, *, model: str, api_key: str) -> dict[str, An
         text={"format": _response_format()},
     )
     return json.loads(response.output_text)
+
+
+def _env_positive_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 def _response_format() -> dict[str, Any]:
