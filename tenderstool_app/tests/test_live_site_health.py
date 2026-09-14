@@ -14,7 +14,9 @@ from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
+from httpx import ASGITransport, AsyncClient
 
+from app.main import app
 from app.services import selectors, tenderstool_client
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -51,3 +53,21 @@ async def test_favorites_also_work_for_vencimientos_module():
     )
 
     assert isinstance(favorites, list)
+
+
+@requires_credentials
+async def test_favoritos_endpoint_works_against_real_site():
+    user = os.environ["TENDERSTOOL_USER"]
+    password = os.environ["TENDERSTOOL_PASSWORD"]
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/favoritos",
+            json={"username": user, "password": password, "search_type": "licitaciones"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    favorites = resp.json()["favorites"]
+    assert isinstance(favorites, list)
+    assert len(favorites) > 0

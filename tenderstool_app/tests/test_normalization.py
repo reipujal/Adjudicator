@@ -13,6 +13,43 @@ def test_normalize_favorite_name_different_case_matches():
     assert parsing.normalize_favorite_name("sap > 1m") == parsing.normalize_favorite_name("SAP > 1M")
 
 
+def test_infer_technology_detects_sap():
+    assert parsing.infer_technology("Servicio de mantenimiento SAP") == "SAP"
+
+
+def test_infer_technology_detects_salesforce_variants():
+    assert parsing.infer_technology("Implantación SalesForce CRM") == "Salesforce"
+    assert parsing.infer_technology("Servicios Sales Force") == "Salesforce"
+
+
+def test_infer_technology_unknown_returns_empty():
+    assert parsing.infer_technology("Servicio de mantenimiento") == ""
+
+
+def test_infer_technology_uses_favorite_name():
+    assert parsing.infer_technology("SAP > 1M", "Suministro sin marca en el título") == "SAP"
+
+
+def test_infer_technology_detects_generic_categories():
+    assert parsing.infer_technology("Servicios de ciberseguridad gestionada") == "Ciberseguridad"
+    assert parsing.infer_technology("Suministro de electrolinera fotovoltaica 250 kWp") == "Energía solar"
+    assert parsing.infer_technology("Centro de atención al usuario y soporte al puesto de trabajo") == "CAU"
+    assert parsing.infer_technology("Servicios de telecomunicaciones corporativas") == "Telecomunicaciones"
+    assert parsing.infer_technology("Adquisición de equipamiento de captación ligero") == "Audiovisual"
+    assert parsing.infer_technology("Evolución y mantenimiento de frameworks corporativos") == "Software"
+    assert parsing.infer_technology("Soporte de la oficina de entrega de valor VMO") == "Sistemas TI"
+
+
+def test_infer_technology_detects_generic_software_terms():
+    assert parsing.infer_technology("Software de gestion municipal en modalidad SaaS") == "Software"
+    assert parsing.infer_technology("Sistema de informacion para salud publica") == "Software"
+    assert parsing.infer_technology("Plataforma de gestion de contenidos y portales") == "Software"
+
+
+def test_infer_technology_does_not_mark_hardware_workplace_as_cau():
+    assert parsing.infer_technology("Adquisicion de equipamiento informatico de puesto de trabajo") == ""
+
+
 def test_normalize_date_valid():
     assert excel_exporter.normalize_date("24/06/2026") == "2026-06-24"
 

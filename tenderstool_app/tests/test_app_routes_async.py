@@ -71,6 +71,23 @@ async def test_favoritos_login_error_returns_401(mocker):
     assert resp.json()["error"] == "usr/pwd incorrectos"
 
 
+async def test_favoritos_technical_error_returns_json_not_plain_500(mocker):
+    async def fake_fetch(*args, **kwargs):
+        raise tenderstool_client.TenderstoolTimeoutError("Timeout durante el login")
+
+    mocker.patch("app.services.tenderstool_client.fetch_favorites", side_effect=fake_fetch)
+
+    async with _client() as client:
+        resp = await client.post(
+            "/favoritos",
+            json={"username": "user@example.com", "password": "secret", "search_type": "licitaciones"},  # pragma: allowlist secret
+        )
+
+    assert resp.status_code == 502
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["error"] == "Error técnico cargando los favoritos. Inténtalo de nuevo."
+
+
 async def test_favoritos_blank_password_is_rejected_before_hitting_playwright(mocker):
     fetch_mock = mocker.patch("app.services.tenderstool_client.fetch_favorites")
 

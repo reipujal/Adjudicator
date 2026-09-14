@@ -46,10 +46,13 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password, search_type: searchType }),
       });
-      const data = await resp.json();
+      const contentType = resp.headers.get("content-type") || "";
+      const data = contentType.includes("application/json")
+        ? await resp.json()
+        : { error: await resp.text() };
 
       if (!resp.ok) {
-        showError(data.error || "No se pudieron cargar los favoritos.");
+        showError(data.error || "Error técnico cargando los favoritos. Inténtalo de nuevo.");
         resetFavorites();
         return;
       }

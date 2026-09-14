@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from .schemas import ExtractionRequest, FavoritesRequest
 from .services import excel_exporter, run_registry, tenderstool_client
+from .services.diagnostics import logger
 from .services.selectors import SearchType
 
 router = APIRouter()
@@ -34,7 +35,8 @@ async def favoritos(payload: FavoritesRequest):
         )
     except tenderstool_client.LoginError:
         return JSONResponse({"error": "usr/pwd incorrectos"}, status_code=401)
-    except (tenderstool_client.TenderstoolTimeoutError, tenderstool_client.ElementNotFoundError):
+    except (tenderstool_client.TenderstoolTimeoutError, tenderstool_client.ElementNotFoundError) as exc:
+        logger.exception("Error técnico cargando favoritos: %s", exc)
         return JSONResponse(
             {"error": "Error técnico cargando los favoritos. Inténtalo de nuevo."}, status_code=502
         )
@@ -112,7 +114,8 @@ async def ejecutar(
             run_registry.finish_error(run_id, "usr/pwd incorrectos", 401)
         except tenderstool_client.FavoriteNotFoundError:
             run_registry.finish_error(run_id, "favorito no encontrado", 404)
-        except (tenderstool_client.TenderstoolTimeoutError, tenderstool_client.ElementNotFoundError):
+        except (tenderstool_client.TenderstoolTimeoutError, tenderstool_client.ElementNotFoundError) as exc:
+            logger.exception("Error técnico durante la extracción %s: %s", run_id, exc)
             run_registry.finish_error(
                 run_id,
                 "Error técnico durante la extracción. Actívese el modo diagnóstico para más detalle.",
