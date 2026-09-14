@@ -126,6 +126,8 @@ async def test_ejecutar_happy_path_reaches_result_via_progress(mocker):
         data = await _wait_until_done(client, run_id)
         assert data["done"] is True
         assert any("login correcto" in s for s in data["steps"])
+        assert data["elapsed_seconds"] >= 0
+        assert data["seconds_since_update"] >= 0
 
         result_resp = await client.get(f"/resultado/{run_id}")
 

@@ -80,6 +80,48 @@ async def test_document_text_cache_reuses_concurrent_same_url(monkeypatch):
     assert cache.texts["https://example.test/doc.pdf"].text == first.text
 
 
+async def test_truncated_pdf_download_returns_empty_document_after_retries(monkeypatch):
+    monkeypatch.setenv("TENDERSTOOL_DOCUMENT_DOWNLOAD_RETRIES", "1")
+
+    class FakeResponse:
+        ok = True
+        status = 200
+
+        async def body(self):
+            return b"%PDF-1.4\ntruncated body"
+
+    class FakeRequest:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, url, timeout):
+            self.calls += 1
+            return FakeResponse()
+
+    class FakePage:
+        def __init__(self):
+            self.request = FakeRequest()
+
+    class DummyDiag:
+        def __init__(self):
+            self.steps = []
+
+        def step(self, message):
+            self.steps.append(message)
+
+    page = FakePage()
+    diag = DummyDiag()
+
+    document = await tenderstool_client._download_document_text(
+        page, "https://example.test/truncated.pdf", "anuncio_licitacion", diag
+    )
+
+    assert document == tenderstool_client.DocumentText(text="", pages=[])
+    assert page.request.calls == 2
+    assert any("reintento descarga documento contractual" in step for step in diag.steps)
+    assert any("PDF incompleto o invalido" in step for step in diag.steps)
+
+
 async def test_contract_fields_are_extracted_by_ai_with_document_pages(monkeypatch):
     async def fake_get_document_text(*args, **kwargs):
         return tenderstool_client.DocumentText(

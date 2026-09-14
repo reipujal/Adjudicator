@@ -31,9 +31,12 @@ def test_get_unknown_run_id_returns_none():
 
 def test_append_step_accumulates_in_order():
     run_registry.create("run-2")
+    before_update = run_registry.get("run-2").updated_at
     run_registry.append_step("run-2", "paso 1")
     run_registry.append_step("run-2", "paso 2")
-    assert run_registry.get("run-2").steps == ["paso 1", "paso 2"]
+    state = run_registry.get("run-2")
+    assert state.steps == ["paso 1", "paso 2"]
+    assert state.updated_at >= before_update
 
 
 def test_append_step_on_unknown_run_id_does_not_raise():

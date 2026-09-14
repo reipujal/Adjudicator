@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import asyncio
+import time
 
 from .tenderstool_client import ExtractionResult
 
@@ -22,6 +23,8 @@ class RunState:
     error: str | None = None
     error_status: int = 200
     result: ExtractionResult | None = None
+    created_at: float = field(default_factory=time.monotonic)
+    updated_at: float = field(default_factory=time.monotonic)
 
 
 _runs: dict[str, RunState] = {}
@@ -36,6 +39,7 @@ def append_step(run_id: str, message: str) -> None:
     state = _runs.get(run_id)
     if state is not None:
         state.steps.append(message)
+        state.updated_at = time.monotonic()
 
 
 def finish_success(run_id: str, result: ExtractionResult) -> None:
@@ -43,6 +47,7 @@ def finish_success(run_id: str, result: ExtractionResult) -> None:
     if state is not None:
         state.done = True
         state.result = result
+        state.updated_at = time.monotonic()
 
 
 def finish_error(run_id: str, message: str, status: int) -> None:
@@ -51,6 +56,7 @@ def finish_error(run_id: str, message: str, status: int) -> None:
         state.done = True
         state.error = message
         state.error_status = status
+        state.updated_at = time.monotonic()
 
 
 def get(run_id: str) -> RunState | None:

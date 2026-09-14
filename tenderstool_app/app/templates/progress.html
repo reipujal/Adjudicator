@@ -10,6 +10,14 @@
   <main class="container" data-run-id="{{ run_id }}">
     <h1>Extracción en curso…</h1>
     <p class="subtitle">Esto puede tardar uno o dos minutos según el número de resultados. No cierres esta pestaña.</p>
+    <div class="progress-status" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <div>
+        <p id="live-status" class="progress-status-title">Preparando extraccion...</p>
+        <p id="live-detail" class="progress-status-detail">Esperando el primer avance.</p>
+        <p id="lost-run-action" class="progress-lost-action" hidden><a class="button" href="/">Volver al inicio</a></p>
+      </div>
+    </div>
     <ul id="steps" class="summary"></ul>
   </main>
 </body>

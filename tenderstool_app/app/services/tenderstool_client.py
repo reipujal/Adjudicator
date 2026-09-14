@@ -411,6 +411,8 @@ def _extract_document_text_sync(document_bytes: bytes) -> DocumentText:
     if not document_bytes.startswith(b"%PDF"):
         text = document_bytes.decode("utf-8", errors="ignore")
         return DocumentText(text=text, pages=[text])
+    if b"%%EOF" not in document_bytes[-4096:]:
+        raise ValueError("PDF incompleto: falta marcador %%EOF")
     if pdfplumber is None:
         return DocumentText(text="", pages=[])
     with pdfplumber.open(BytesIO(document_bytes)) as pdf:
@@ -558,7 +560,11 @@ async def _download_document_text(page: Page, url: str, label: str, diag: Diagno
         except Exception as exc:  # noqa: BLE001 - transient network/PDF failures are retried per document
             last_error = str(exc)
             if attempt >= max_retries:
-                raise
+                diag.step(
+                    f"documento contractual no procesado: {label} "
+                    f"error=PDF incompleto o invalido tras {max_retries + 1} intentos ({last_error})"
+                )
+                return DocumentText(text="", pages=[])
             diag.step(f"reintento descarga documento contractual: {label} intento={attempt + 2}")
             await asyncio.sleep(min(2**attempt, 8))
     raise ElementNotFoundError(f"No se pudo descargar documento {label}: {last_error}")

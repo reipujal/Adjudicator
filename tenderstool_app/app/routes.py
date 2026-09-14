@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from pathlib import Path
 
@@ -135,7 +136,13 @@ async def progreso(run_id: str):
     state = run_registry.get(run_id)
     if state is None:
         return JSONResponse({"error": "run_id desconocido"}, status_code=404)
-    return {"steps": state.steps, "done": state.done}
+    now = time.monotonic()
+    return {
+        "steps": state.steps,
+        "done": state.done,
+        "elapsed_seconds": round(now - state.created_at, 1),
+        "seconds_since_update": round(now - state.updated_at, 1),
+    }
 
 
 @router.get("/resultado/{run_id}", response_class=HTMLResponse)
