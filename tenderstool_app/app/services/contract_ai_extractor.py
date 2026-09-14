@@ -18,8 +18,8 @@ from typing import Any
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[3] / ".env")
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=True)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_AI_TIMEOUT_SECONDS = 90

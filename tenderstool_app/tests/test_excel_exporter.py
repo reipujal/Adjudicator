@@ -105,30 +105,49 @@ def test_build_excel_final_columns_match_requested_contract(tmp_path):
         "Número máximo de prórrogas",
         "Duración prórroga",
         "Solvencia",
-        "Origen fecha inicio",
-        "Documento fecha inicio",
-        "Página fecha inicio",
-        "Origen fecha fin",
-        "Cálculo fecha fin",
-        "Documento fecha fin",
-        "Página fecha fin",
-        "Origen fecha de vencimiento",
-        "Cálculo fecha de vencimiento",
-        "Documento fecha de vencimiento",
-        "Página fecha de vencimiento",
-        "Origen prorrogable hasta",
-        "Cálculo prorrogable hasta",
-        "Documento prorrogable hasta",
-        "Página prorrogable hasta",
-        "Documento duración del contrato",
-        "Página duración del contrato",
-        "Documento número máximo de prórrogas",
-        "Página número máximo de prórrogas",
-        "Documento duración prórroga",
-        "Página duración prórroga",
-        "Documento solvencia",
-        "Página solvencia",
+        "Trazabilidad fechas contrato",
+        "Trazabilidad duración/prórrogas",
+        "Trazabilidad solvencia",
+        "Observaciones IA",
     ]
+
+
+def test_build_excel_compacts_traceability_columns(tmp_path):
+    rows = [
+        {
+            "fecha_inicio_contrato": "2027-01-01",
+            "fecha_inicio_origen": "explicit",
+            "fecha_inicio_documento": "PCAP.pdf",
+            "fecha_inicio_pagina": 5,
+            "fecha_fin_contrato": "2027-12-31",
+            "fecha_fin_origen": "calculated",
+            "fecha_fin_calculo": "Inicio 2027-01-01 + 1 año - 1 día.",
+            "fecha_fin_documento": "PCAP.pdf",
+            "fecha_fin_pagina": 5,
+            "duracion_contrato": "1 año",
+            "duracion_contrato_documento": "PCAP.pdf",
+            "duracion_contrato_pagina": 5,
+            "solvencia": "Ver cláusula 1.10",
+            "solvencia_documento": "PCAP.pdf",
+            "solvencia_pagina": 8,
+        }
+    ]
+
+    path = excel_exporter.build_excel(rows, "licitaciones", "Filtro", output_dir=tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Resultados"]
+    header = [cell.value for cell in ws[1]]
+    row_values = dict(zip(header, [cell.value for cell in ws[2]]))
+
+    assert "Documento fecha inicio" not in header
+    assert "Página solvencia" not in header
+    assert "Inicio: PCAP.pdf p.5; explicit" in row_values["Trazabilidad fechas contrato"]
+    assert "Fin: PCAP.pdf p.5; calculated; Inicio 2027-01-01 + 1 año - 1 día." in row_values[
+        "Trazabilidad fechas contrato"
+    ]
+    assert row_values["Trazabilidad duración/prórrogas"] == "Duración: PCAP.pdf p.5"
+    assert row_values["Trazabilidad solvencia"] == "Solvencia: PCAP.pdf p.8"
+    assert row_values["Observaciones IA"] == "Inicio 2027-01-01 + 1 año - 1 día."
 
 
 def test_build_excel_filename_matches_expected_pattern(tmp_path):

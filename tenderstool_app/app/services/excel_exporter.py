@@ -36,29 +36,10 @@ COLUMNS: list[tuple[str, str]] = [
     ("numero_maximo_prorrogas", "Número máximo de prórrogas"),
     ("duracion_prorroga", "Duración prórroga"),
     ("solvencia", "Solvencia"),
-    ("fecha_inicio_origen", "Origen fecha inicio"),
-    ("fecha_inicio_documento", "Documento fecha inicio"),
-    ("fecha_inicio_pagina", "Página fecha inicio"),
-    ("fecha_fin_origen", "Origen fecha fin"),
-    ("fecha_fin_calculo", "Cálculo fecha fin"),
-    ("fecha_fin_documento", "Documento fecha fin"),
-    ("fecha_fin_pagina", "Página fecha fin"),
-    ("fecha_vencimiento_origen", "Origen fecha de vencimiento"),
-    ("fecha_vencimiento_calculo", "Cálculo fecha de vencimiento"),
-    ("fecha_vencimiento_documento", "Documento fecha de vencimiento"),
-    ("fecha_vencimiento_pagina", "Página fecha de vencimiento"),
-    ("prorrogable_hasta_origen", "Origen prorrogable hasta"),
-    ("prorrogable_hasta_calculo", "Cálculo prorrogable hasta"),
-    ("prorrogable_hasta_documento", "Documento prorrogable hasta"),
-    ("prorrogable_hasta_pagina", "Página prorrogable hasta"),
-    ("duracion_contrato_documento", "Documento duración del contrato"),
-    ("duracion_contrato_pagina", "Página duración del contrato"),
-    ("numero_maximo_prorrogas_documento", "Documento número máximo de prórrogas"),
-    ("numero_maximo_prorrogas_pagina", "Página número máximo de prórrogas"),
-    ("duracion_prorroga_documento", "Documento duración prórroga"),
-    ("duracion_prorroga_pagina", "Página duración prórroga"),
-    ("solvencia_documento", "Documento solvencia"),
-    ("solvencia_pagina", "Página solvencia"),
+    ("trazabilidad_fechas_contrato", "Trazabilidad fechas contrato"),
+    ("trazabilidad_duracion_prorrogas", "Trazabilidad duración/prórrogas"),
+    ("trazabilidad_solvencia", "Trazabilidad solvencia"),
+    ("observaciones_ia", "Observaciones IA"),
 ]
 
 _DATE_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
@@ -88,6 +69,59 @@ def build_filename(search_type: str, favorite_name: str, when: datetime | None =
     return f"tenderstool_{search_type}_{favorito}_{timestamp}.xlsx"
 
 
+def _source(row: dict, prefix: str) -> str:
+    document = row.get(f"{prefix}_documento")
+    page = row.get(f"{prefix}_pagina")
+    if document in ("", None) and page in ("", None):
+        return ""
+    if document not in ("", None) and page not in ("", None):
+        return f"{document} p.{page}"
+    return str(document or f"p.{page}")
+
+
+def _trace_item(row: dict, label: str, prefix: str) -> str:
+    source = _source(row, prefix)
+    origin = row.get(f"{prefix}_origen")
+    calculation = row.get(f"{prefix}_calculo")
+    if not source and origin in ("", None, "null") and calculation in ("", None):
+        return ""
+
+    details = []
+    if source:
+        details.append(source)
+    if origin not in ("", None, "null"):
+        details.append(str(origin))
+    if calculation:
+        details.append(str(calculation))
+    return f"{label}: {'; '.join(details)}"
+
+
+def _join_trace(*items: str) -> str:
+    return "\n".join(item for item in items if item)
+
+
+def _compact_trace(row: dict) -> dict:
+    record = dict(row)
+    record["trazabilidad_fechas_contrato"] = _join_trace(
+        _trace_item(row, "Inicio", "fecha_inicio"),
+        _trace_item(row, "Fin", "fecha_fin"),
+        _trace_item(row, "Vencimiento", "fecha_vencimiento"),
+        _trace_item(row, "Prorrogable hasta", "prorrogable_hasta"),
+    )
+    record["trazabilidad_duracion_prorrogas"] = _join_trace(
+        _trace_item(row, "Duración", "duracion_contrato"),
+        _trace_item(row, "Número máximo de prórrogas", "numero_maximo_prorrogas"),
+        _trace_item(row, "Duración prórroga", "duracion_prorroga"),
+    )
+    record["trazabilidad_solvencia"] = _trace_item(row, "Solvencia", "solvencia")
+    record["observaciones_ia"] = _join_trace(
+        str(row.get("fecha_fin_calculo", "") or ""),
+        str(row.get("fecha_vencimiento_calculo", "") or ""),
+        str(row.get("prorrogable_hasta_calculo", "") or ""),
+    )
+    return record
+
+
 def build_excel(rows: list[dict], search_type: str, favorite_name: str, output_dir: Path | None = None) -> Path:
     """Construye el .xlsx a partir de las filas ya extraídas. No falla si
     faltan campos: se rellenan como cadena vacía."""
@@ -96,7 +130,8 @@ def build_excel(rows: list[dict], search_type: str, favorite_name: str, output_d
 
     data = []
     for row in rows:
-        record = {key: row.get(key, "") for key, _ in COLUMNS}
+        compact_row = _compact_trace(row)
+        record = {key: compact_row.get(key, "") for key, _ in COLUMNS}
         data.append(record)
 
     df = pd.DataFrame(data, columns=[key for key, _ in COLUMNS])
