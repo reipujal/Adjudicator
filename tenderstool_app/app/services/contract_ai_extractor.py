@@ -12,6 +12,7 @@ import os
 import re
 import hashlib
 import threading
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -26,11 +27,12 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_AI_TIMEOUT_SECONDS = 90
 DEFAULT_AI_MAX_RETRIES = 2
-AI_CACHE_VERSION = "contract-ai-v2"
+AI_CACHE_VERSION = "contract-ai-v3"
 CACHE_PATH = Path(__file__).resolve().parents[1] / "cache" / "contract_ai_cache.json"
 _CACHE_LOCK = threading.Lock()
 MAX_PAGE_CHARS = 6000
 MAX_TOTAL_CHARS = 90000
+MAX_SELECTED_PAGES = 24
 
 FIELD_KEYS = [
     "fecha_inicio_contrato",
@@ -119,7 +121,7 @@ def extract_contract_fields_from_pages(
 def _build_prompt_pages(pages: list[DocumentPage]) -> str:
     chunks: list[str] = []
     total = 0
-    for page in pages:
+    for page in _select_relevant_pages(pages):
         text = " ".join(page.text.split())
         if not text:
             continue
@@ -131,6 +133,35 @@ def _build_prompt_pages(pages: list[DocumentPage]) -> str:
         chunks.append(chunk)
         total += len(chunk)
     return "\n\n".join(chunks)
+
+
+def _select_relevant_pages(pages: list[DocumentPage]) -> list[DocumentPage]:
+    scored = [(index, _page_score(page), page) for index, page in enumerate(pages)]
+    relevant = [(index, score, page) for index, score, page in scored if score > 0]
+    if not relevant:
+        return pages[:MAX_SELECTED_PAGES]
+    selected = sorted(relevant, key=lambda item: (-item[1], item[0]))[:MAX_SELECTED_PAGES]
+    return [page for _, _, page in sorted(selected, key=lambda item: item[0])]
+
+
+def _page_score(page: DocumentPage) -> int:
+    text = _ascii_lower(f"{page.document_name} {page.text}")
+    score = 0
+    for marker, weight in [
+        ("duracion", 5),
+        ("plazo", 5),
+        ("vigencia", 4),
+        ("inicio", 4),
+        ("fecha de inicio", 6),
+        ("prorroga", 5),
+        ("vencimiento", 5),
+        ("solvencia", 6),
+        ("clausula", 2),
+        ("apartado", 2),
+    ]:
+        if marker in text:
+            score += weight
+    return score
 
 
 def _call_model(document_text: str, *, model: str, api_key: str) -> dict[str, Any]:
@@ -278,8 +309,44 @@ def _flatten_response(data: dict[str, Any]) -> dict[str, Any]:
         if calculation_key := CALCULATION_KEYS.get(field):
             if calculation := item.get("calculation"):
                 flattened[calculation_key] = calculation
+    _normalize_contract_values(flattened)
     _normalize_calculated_end_dates(flattened)
     return flattened
+
+
+def _normalize_contract_values(fields: dict[str, Any]) -> None:
+    if duration := _normalize_duration_label(fields.get("duracion_contrato", "")):
+        fields["duracion_contrato"] = duration
+    if duration := _normalize_duration_label(fields.get("duracion_prorroga", "")):
+        fields["duracion_prorroga"] = duration
+    if prorrogas := _normalize_extension_count(fields.get("numero_maximo_prorrogas", "")):
+        fields["numero_maximo_prorrogas"] = prorrogas
+
+
+def _normalize_duration_label(value: str) -> str:
+    normalized = _ascii_lower(str(value))
+    amount_match = re.search(r"\b(\d+)\s*(anos?|anys?|years?|mes(?:es)?|months?)\b", normalized)
+    if not amount_match:
+        words = {"un ano": "1 año", "una ano": "1 año", "un any": "1 año", "un mes": "1 mes"}
+        return words.get(normalized, "")
+    amount = int(amount_match.group(1))
+    unit = amount_match.group(2)
+    if unit.startswith(("ano", "any", "year")):
+        return f"{amount} {'año' if amount == 1 else 'años'}"
+    if amount % 12 == 0:
+        years = amount // 12
+        return f"{years} {'año' if years == 1 else 'años'}"
+    return f"{amount} {'mes' if amount == 1 else 'meses'}"
+
+
+def _normalize_extension_count(value: str) -> str:
+    normalized = _ascii_lower(str(value))
+    if normalized in {"no", "none", "null", "sin prorroga", "sin prorrogas", "no procede", "no aplica"}:
+        return "0"
+    match = re.search(r"\b(\d+)\b", normalized)
+    if match and normalized == match.group(1):
+        return match.group(1)
+    return ""
 
 
 def _normalize_calculated_end_dates(fields: dict[str, Any]) -> None:
@@ -331,13 +398,24 @@ def _normalize_document_name(value: str) -> str:
     return document.strip()
 
 
+def _ascii_lower(value: str) -> str:
+    text = (
+        value.replace("\u00c3\u00b1", "n")
+        .replace("\u00c3\u00b3", "o")
+        .replace("\u00c3\u00a1", "a")
+        .replace("\u00c3\u00a9", "e")
+    )
+    normalized = unicodedata.normalize("NFKD", text)
+    return " ".join("".join(ch for ch in normalized if not unicodedata.combining(ch)).casefold().split())
+
+
 def _parse_duration_label(value: str) -> tuple[int, str] | None:
-    normalized = " ".join(str(value).casefold().split())
+    normalized = _ascii_lower(str(value))
     parts = normalized.split(" ")
     if len(parts) < 2 or not parts[0].isdigit():
         return None
     unit = parts[1]
-    if unit.startswith("año"):
+    if unit.startswith("ano") or unit.startswith("año"):
         return int(parts[0]), "years"
     if unit.startswith("mes"):
         return int(parts[0]), "months"

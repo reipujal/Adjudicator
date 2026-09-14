@@ -159,3 +159,43 @@ def test_contract_ai_reuses_cached_model_response(monkeypatch, tmp_path):
     assert first == second
     assert first["duracion_contrato"] == "1 año"
     assert calls == 1
+
+
+def test_contract_ai_normalizes_extensions_and_duration_labels():
+    data = {
+        key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+        for key in contract_ai_extractor.FIELD_KEYS
+    }
+    data["numero_maximo_prorrogas"] = {
+        "value": "No",
+        "document": "PCAP.pdf",
+        "page": 4,
+        "origin": "explicit",
+        "calculation": None,
+    }
+    data["duracion_prorroga"] = {
+        "value": "12 meses",
+        "document": "PCAP.pdf",
+        "page": 4,
+        "origin": "explicit",
+        "calculation": None,
+    }
+
+    flattened = contract_ai_extractor._flatten_response(data)
+
+    assert flattened["numero_maximo_prorrogas"] == "0"
+    assert flattened["duracion_prorroga"] == "1 año"
+
+
+def test_contract_ai_selects_relevant_pages_before_prompt():
+    pages = [
+        contract_ai_extractor.DocumentPage("PPT.pdf", 1, "Arquitectura tecnica sin datos contractuales."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 2, "Duracion del contrato y posible prorroga."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 3, "Solvencia economica y tecnica."),
+    ]
+
+    prompt = contract_ai_extractor._build_prompt_pages(pages)
+
+    assert "PAGINA: 2" in prompt
+    assert "PAGINA: 3" in prompt
+    assert "PAGINA: 1" not in prompt
