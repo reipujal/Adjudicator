@@ -256,16 +256,22 @@ def _extract_response_with_cache(
 
 
 def _needs_fallback_response(response_data: dict[str, Any]) -> bool:
-    for key in FALLBACK_FIELD_KEYS:
-        value = response_data.get(key)
-        if not isinstance(value, dict) or _is_empty(value.get("value")):
-            return True
-    return False
+    duration = _field_value(response_data, "duracion_contrato")
+    extensions = _normalize_extension_count(_field_value(response_data, "numero_maximo_prorrogas"))
+    extension_duration = _field_value(response_data, "duracion_prorroga")
+
+    if _is_empty(duration):
+        return True
+    if _is_empty(extensions):
+        return True
+    if extensions == "0":
+        return False
+    return _is_empty(extension_duration)
 
 
 def _merge_missing_response_values(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
     merged = dict(primary)
-    for key in FALLBACK_FIELD_KEYS:
+    for key in _missing_fallback_fields(primary):
         primary_value = primary.get(key)
         fallback_value = fallback.get(key)
         if not isinstance(fallback_value, dict):
@@ -273,6 +279,28 @@ def _merge_missing_response_values(primary: dict[str, Any], fallback: dict[str, 
         if not isinstance(primary_value, dict) or _is_empty(primary_value.get("value")):
             merged[key] = fallback_value
     return merged
+
+
+def _missing_fallback_fields(response_data: dict[str, Any]) -> set[str]:
+    missing: set[str] = set()
+    duration = _field_value(response_data, "duracion_contrato")
+    extensions = _normalize_extension_count(_field_value(response_data, "numero_maximo_prorrogas"))
+    extension_duration = _field_value(response_data, "duracion_prorroga")
+    if _is_empty(duration):
+        missing.add("duracion_contrato")
+    if _is_empty(extensions):
+        missing.add("numero_maximo_prorrogas")
+    if extensions != "0" and _is_empty(extension_duration):
+        missing.add("duracion_prorroga")
+    return missing
+
+
+def _field_value(response_data: dict[str, Any], key: str) -> str:
+    value = response_data.get(key)
+    if not isinstance(value, dict):
+        return ""
+    raw_value = value.get("value")
+    return "" if raw_value is None else str(raw_value).strip()
 
 
 def _is_empty(value: Any) -> bool:

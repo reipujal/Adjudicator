@@ -392,3 +392,56 @@ def test_contract_ai_fallback_fills_only_missing_fields(monkeypatch, tmp_path):
     assert flattened["duracion_contrato"] == "2 años"
     assert flattened["numero_maximo_prorrogas"] == "1"
     assert calls == 2
+
+
+def test_contract_ai_skips_fallback_when_no_extensions(monkeypatch, tmp_path):
+    calls = 0
+    cache_path = tmp_path / "contract_ai_cache.json"
+
+    def fake_call_model(document_text, *, model, api_key):
+        nonlocal calls
+        calls += 1
+        data = {
+            key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+            for key in contract_ai_extractor.FIELD_KEYS
+        }
+        data["duracion_contrato"] = {
+            "value": "4 anos",
+            "document": "PCAP.pdf",
+            "page": 2,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        data["numero_maximo_prorrogas"] = {
+            "value": "0",
+            "document": "PCAP.pdf",
+            "page": 2,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        return data
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(contract_ai_extractor, "CACHE_PATH", cache_path)
+    monkeypatch.setattr(contract_ai_extractor, "_call_model", fake_call_model)
+    monkeypatch.setattr(contract_ai_extractor, "_build_prompt_pages", lambda pages: "PROMPT PRINCIPAL")
+    monkeypatch.setattr(contract_ai_extractor, "_build_fallback_prompt_pages", lambda pages: "PROMPT FALLBACK")
+
+    pages = [contract_ai_extractor.DocumentPage("PCAP.pdf", 2, "Duracion cuatro anos sin prorrogas.")]
+    flattened = contract_ai_extractor.extract_contract_fields_from_pages(pages, model="test-model")
+
+    assert flattened["duracion_contrato"] == "4 años"
+    assert flattened["numero_maximo_prorrogas"] == "0"
+    assert "duracion_prorroga" not in flattened
+    assert calls == 1
+
+
+def test_contract_ai_missing_fallback_fields_ignore_extension_duration_when_no_extensions():
+    data = {
+        key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+        for key in contract_ai_extractor.FIELD_KEYS
+    }
+    data["duracion_contrato"]["value"] = "2 anos"
+    data["numero_maximo_prorrogas"]["value"] = "No"
+
+    assert contract_ai_extractor._missing_fallback_fields(data) == set()
