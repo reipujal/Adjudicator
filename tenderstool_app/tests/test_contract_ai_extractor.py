@@ -145,6 +145,27 @@ def test_contract_ai_reuses_cached_model_response(monkeypatch, tmp_path):
             "origin": "explicit",
             "calculation": None,
         }
+        data["numero_maximo_prorrogas"] = {
+            "value": "0",
+            "document": "PCAP.pdf",
+            "page": 3,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        data["duracion_prorroga"] = {
+            "value": "0 meses",
+            "document": "PCAP.pdf",
+            "page": 3,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        data["solvencia"] = {
+            "value": "Solvencia",
+            "document": "PCAP.pdf",
+            "page": 3,
+            "origin": "explicit",
+            "calculation": None,
+        }
         return data
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -189,9 +210,10 @@ def test_contract_ai_normalizes_extensions_and_duration_labels():
 
 def test_contract_ai_selects_relevant_pages_before_prompt():
     pages = [
-        contract_ai_extractor.DocumentPage("PPT.pdf", 1, "Arquitectura tecnica sin datos contractuales."),
+        contract_ai_extractor.DocumentPage("PPT.pdf", 1, "Arquitectura general sin datos contractuales."),
         contract_ai_extractor.DocumentPage("PCAP.pdf", 2, "Duracion del contrato y posible prorroga."),
         contract_ai_extractor.DocumentPage("PCAP.pdf", 3, "Solvencia economica y tecnica."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 4, "Anexo de personal asignado."),
     ]
 
     prompt = contract_ai_extractor._build_prompt_pages(pages)
@@ -199,3 +221,106 @@ def test_contract_ai_selects_relevant_pages_before_prompt():
     assert "PAGINA: 2" in prompt
     assert "PAGINA: 3" in prompt
     assert "PAGINA: 1" not in prompt
+    assert "PAGINA: 4" not in prompt
+
+
+def test_contract_ai_fallback_keeps_first_pages_for_each_document(monkeypatch):
+    monkeypatch.setattr(contract_ai_extractor, "FALLBACK_PAGES_PER_DOCUMENT", 3)
+    pages = [
+        contract_ai_extractor.DocumentPage("Anuncio.pdf", 1, "Objeto del contrato."),
+        contract_ai_extractor.DocumentPage("Anuncio.pdf", 2, "Presupuesto base."),
+        contract_ai_extractor.DocumentPage("Anuncio.pdf", 3, "CPV."),
+        contract_ai_extractor.DocumentPage("Anuncio.pdf", 4, "Mesa de contratacion."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 1, "Indice."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 2, "Cuadro de caracteristicas."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 3, "Condiciones generales."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 4, "Sin datos."),
+    ]
+
+    selected = contract_ai_extractor._select_fallback_pages(pages)
+
+    assert [(page.document_name, page.page_number) for page in selected] == [
+        ("Anuncio.pdf", 1),
+        ("Anuncio.pdf", 2),
+        ("Anuncio.pdf", 3),
+        ("PCAP.pdf", 1),
+        ("PCAP.pdf", 2),
+        ("PCAP.pdf", 3),
+    ]
+
+
+def test_contract_ai_fallback_adds_relevant_pages(monkeypatch):
+    monkeypatch.setattr(contract_ai_extractor, "FALLBACK_PAGES_PER_DOCUMENT", 0)
+    pages = [
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 1, "Indice."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 2, "Contexto previo."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 3, "Duracion del contrato."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 4, "Contexto posterior."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 5, "Anexo."),
+    ]
+
+    selected = contract_ai_extractor._select_fallback_pages(pages)
+
+    assert [page.page_number for page in selected] == [3]
+
+
+def test_contract_ai_fallback_fills_only_missing_fields(monkeypatch, tmp_path):
+    calls = 0
+    cache_path = tmp_path / "contract_ai_cache.json"
+
+    def empty_payload():
+        return {
+            key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+            for key in contract_ai_extractor.FIELD_KEYS
+        }
+
+    def fake_call_model(document_text, *, model, api_key):
+        nonlocal calls
+        calls += 1
+        data = empty_payload()
+        if "SEGUNDA PASADA" in document_text:
+            data["duracion_contrato"] = {
+                "value": "2 anos",
+                "document": "PCAP.pdf",
+                "page": 12,
+                "origin": "explicit",
+                "calculation": None,
+            }
+            data["numero_maximo_prorrogas"] = {
+                "value": "1",
+                "document": "PCAP.pdf",
+                "page": 12,
+                "origin": "explicit",
+                "calculation": None,
+            }
+        else:
+            data["solvencia"] = {
+                "value": "Solvencia principal",
+                "document": "PCAP.pdf",
+                "page": 8,
+                "origin": "explicit",
+                "calculation": None,
+            }
+        return data
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(contract_ai_extractor, "CACHE_PATH", cache_path)
+    monkeypatch.setattr(contract_ai_extractor, "_call_model", fake_call_model)
+    monkeypatch.setattr(contract_ai_extractor, "_build_prompt_pages", lambda pages: "PROMPT PRINCIPAL")
+    monkeypatch.setattr(
+        contract_ai_extractor,
+        "_build_fallback_prompt_pages",
+        lambda pages: "PROMPT FALLBACK AMPLIO",
+    )
+
+    pages = [
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 8, "Solvencia economica."),
+        contract_ai_extractor.DocumentPage("PCAP.pdf", 12, "Duracion del contrato dos anos y una prorroga."),
+    ]
+
+    flattened = contract_ai_extractor.extract_contract_fields_from_pages(pages, model="test-model")
+
+    assert flattened["solvencia"] == "Solvencia principal"
+    assert flattened["duracion_contrato"] == "2 años"
+    assert flattened["numero_maximo_prorrogas"] == "1"
+    assert calls == 2

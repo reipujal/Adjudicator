@@ -27,12 +27,19 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_AI_TIMEOUT_SECONDS = 90
 DEFAULT_AI_MAX_RETRIES = 2
-AI_CACHE_VERSION = "contract-ai-v3"
+AI_CACHE_VERSION = "contract-ai-v4"
 CACHE_PATH = Path(__file__).resolve().parents[1] / "cache" / "contract_ai_cache.json"
 _CACHE_LOCK = threading.Lock()
 MAX_PAGE_CHARS = 6000
 MAX_TOTAL_CHARS = 90000
 MAX_SELECTED_PAGES = 24
+FALLBACK_PAGES_PER_DOCUMENT = 18
+FALLBACK_MAX_SELECTED_PAGES = 48
+FALLBACK_FIELD_KEYS = {
+    "duracion_contrato",
+    "numero_maximo_prorrogas",
+    "duracion_prorroga",
+}
 
 FIELD_KEYS = [
     "fecha_inicio_contrato",
@@ -106,22 +113,31 @@ def extract_contract_fields_from_pages(
 
     resolved_model = model or os.getenv("TENDERSTOOL_AI_MODEL", DEFAULT_MODEL)
     prompt_pages = _build_prompt_pages(pages)
-    cache_key = _cache_key(prompt_pages, resolved_model)
-    response_data = _read_cached_response(cache_key)
-    if response_data is None:
-        response_data = _call_model(
-            prompt_pages,
-            model=resolved_model,
-            api_key=api_key,
-        )
-        _write_cached_response(cache_key, response_data)
+    response_data = _extract_response_with_cache(prompt_pages, model=resolved_model, api_key=api_key)
+    if _needs_fallback_response(response_data):
+        fallback_pages = _build_fallback_prompt_pages(pages)
+        if fallback_pages and fallback_pages != prompt_pages:
+            fallback_data = _extract_response_with_cache(
+                "SEGUNDA PASADA: contexto ampliado para rellenar solo campos ausentes.\n\n" + fallback_pages,
+                model=resolved_model,
+                api_key=api_key,
+            )
+            response_data = _merge_missing_response_values(response_data, fallback_data)
     return _flatten_response(response_data)
 
 
 def _build_prompt_pages(pages: list[DocumentPage]) -> str:
+    return _format_prompt_pages(_select_relevant_pages(pages))
+
+
+def _build_fallback_prompt_pages(pages: list[DocumentPage]) -> str:
+    return _format_prompt_pages(_select_fallback_pages(pages))
+
+
+def _format_prompt_pages(pages: list[DocumentPage]) -> str:
     chunks: list[str] = []
     total = 0
-    for page in _select_relevant_pages(pages):
+    for page in pages:
         text = " ".join(page.text.split())
         if not text:
             continue
@@ -142,6 +158,62 @@ def _select_relevant_pages(pages: list[DocumentPage]) -> list[DocumentPage]:
         return pages[:MAX_SELECTED_PAGES]
     selected = sorted(relevant, key=lambda item: (-item[1], item[0]))[:MAX_SELECTED_PAGES]
     return [page for _, _, page in sorted(selected, key=lambda item: item[0])]
+
+
+def _select_fallback_pages(pages: list[DocumentPage]) -> list[DocumentPage]:
+    counts_by_document: dict[str, int] = {}
+    indexes: set[int] = set()
+    for index, page in enumerate(pages):
+        document_key = page.document_name or ""
+        count = counts_by_document.get(document_key, 0)
+        if count < FALLBACK_PAGES_PER_DOCUMENT:
+            indexes.add(index)
+        counts_by_document[document_key] = count + 1
+
+    scored = [(index, _page_score(page), page) for index, page in enumerate(pages)]
+    relevant = [(index, score, page) for index, score, page in scored if score > 0]
+    for index, _score, _page in sorted(relevant, key=lambda item: (-item[1], item[0]))[:FALLBACK_MAX_SELECTED_PAGES]:
+        indexes.add(index)
+
+    selected = sorted(indexes)[:FALLBACK_MAX_SELECTED_PAGES]
+    return [pages[index] for index in selected]
+
+
+def _extract_response_with_cache(document_text: str, *, model: str, api_key: str) -> dict[str, Any]:
+    cache_key = _cache_key(document_text, model)
+    response_data = _read_cached_response(cache_key)
+    if response_data is None:
+        response_data = _call_model(
+            document_text,
+            model=model,
+            api_key=api_key,
+        )
+        _write_cached_response(cache_key, response_data)
+    return response_data
+
+
+def _needs_fallback_response(response_data: dict[str, Any]) -> bool:
+    for key in FALLBACK_FIELD_KEYS:
+        value = response_data.get(key)
+        if not isinstance(value, dict) or _is_empty(value.get("value")):
+            return True
+    return False
+
+
+def _merge_missing_response_values(primary: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    for key in FALLBACK_FIELD_KEYS:
+        primary_value = primary.get(key)
+        fallback_value = fallback.get(key)
+        if not isinstance(fallback_value, dict):
+            continue
+        if not isinstance(primary_value, dict) or _is_empty(primary_value.get("value")):
+            merged[key] = fallback_value
+    return merged
+
+
+def _is_empty(value: Any) -> bool:
+    return value is None or str(value).strip() == ""
 
 
 def _page_score(page: DocumentPage) -> int:
