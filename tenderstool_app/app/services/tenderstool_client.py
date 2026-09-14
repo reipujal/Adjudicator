@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from io import BytesIO
 from dataclasses import dataclass
@@ -309,6 +310,7 @@ async def extract_detail(
                 return {}, "sin acceso (contenido Platinum)", ""
             detail_html = await detail_page.content()
             fields = parsing.parse_detail(detail_html)
+            ai_stats = contract_ai_extractor.ExtractionStats()
             pdf_fields = await extract_contract_fields_from_documents(
                 detail_page,
                 detail_html,
@@ -321,7 +323,11 @@ async def extract_detail(
                 ],
                 diag=diag,
                 document_cache=document_cache,
+                context=_build_contract_extraction_context(row, fields),
+                stats=ai_stats,
             )
+            if ai_stats.cache_hits or ai_stats.cache_misses:
+                diag.step(f"metricas IA contractual: {ai_stats.summary()}")
             _merge_contract_fields_from_primary_source(fields, pdf_fields)
             return fields, "ok", ""
         except PlaywrightTimeoutError as exc:
@@ -349,6 +355,32 @@ def _merge_contract_fields_from_primary_source(target: dict, source: dict) -> No
             continue
         if target.get(key) in ("", None) or key in CONTRACT_FIELD_KEYS:
             target[key] = value
+
+
+def _build_contract_extraction_context(row: dict, fields: dict) -> contract_ai_extractor.ExtractionContext:
+    title = row.get("titulo", "") or fields.get("titulo", "")
+    expediente = fields.get("numero_expediente", "") or row.get("numero_expediente", "")
+    return contract_ai_extractor.ExtractionContext(
+        title=title,
+        expediente=expediente,
+        lot=_infer_lot_context(title) or _infer_lot_context("", expediente),
+    )
+
+
+def _infer_lot_context(title: str, expediente: str = "") -> str:
+    text = " ".join(value for value in [title, expediente] if value)
+    patterns = [
+        r"\bLote\s+(\d+[A-Za-z]?)\b(?:\s*[:.-]\s*([^|]+?))?(?=$|\s+Lote\s+\d|\.)",
+        r"_lote(\d+[A-Za-z]?)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        lot_id = match.group(1)
+        description = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else ""
+        return f"Lote {lot_id}: {description}" if description else f"Lote {lot_id}"
+    return ""
 
 
 def _merge_contract_fields_without_overwrite(target: dict, source: dict) -> None:
@@ -397,6 +429,8 @@ async def extract_contract_fields_from_documents(
     reference_dates: list[str],
     diag: DiagnosticsLogger,
     document_cache: DocumentTextCache | None = None,
+    context: contract_ai_extractor.ExtractionContext | None = None,
+    stats: contract_ai_extractor.ExtractionStats | None = None,
 ) -> dict:
     if pdfplumber is None:
         diag.step("pdfplumber no instalado: se omite extracción contractual desde PDF")
@@ -438,7 +472,7 @@ async def extract_contract_fields_from_documents(
 
     try:
         diag.step(f"extraccion contractual IA iniciada: paginas={len(ai_pages)}")
-        fields = await asyncio.to_thread(contract_ai_extractor.extract_contract_fields_from_pages, ai_pages)
+        fields = await asyncio.to_thread(_extract_contract_fields_with_optional_context, ai_pages, context, stats)
     except contract_ai_extractor.ContractAIUnavailableError as exc:
         diag.step(f"extracción contractual IA omitida: {exc}")
         return {}
@@ -452,8 +486,10 @@ async def extract_contract_fields_from_documents(
             try:
                 diag.step(f"extraccion contractual IA desde fuente publica iniciada: paginas={len(source_pages)}")
                 fields = await asyncio.to_thread(
-                    contract_ai_extractor.extract_contract_fields_from_pages,
+                    _extract_contract_fields_with_optional_context,
                     source_pages,
+                    context,
+                    stats,
                 )
             except Exception as exc:  # noqa: BLE001 - fallback best effort
                 diag.step(f"extraccion contractual IA desde fuente publica fallida: {exc}")
@@ -462,6 +498,16 @@ async def extract_contract_fields_from_documents(
     if any(fields.get(key) for key in ("duracion_contrato", "fecha_inicio_contrato", "fecha_fin_contrato")):
         diag.step("datos contractuales extraídos mediante IA")
     return fields
+
+
+def _extract_contract_fields_with_optional_context(
+    pages: list[contract_ai_extractor.DocumentPage],
+    context: contract_ai_extractor.ExtractionContext | None,
+    stats: contract_ai_extractor.ExtractionStats | None,
+) -> dict:
+    if context is None and stats is None:
+        return contract_ai_extractor.extract_contract_fields_from_pages(pages)
+    return contract_ai_extractor.extract_contract_fields_from_pages(pages, context=context, stats=stats)
 
 
 async def _get_document_text(

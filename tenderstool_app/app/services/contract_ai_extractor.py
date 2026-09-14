@@ -27,7 +27,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_AI_TIMEOUT_SECONDS = 90
 DEFAULT_AI_MAX_RETRIES = 2
-AI_CACHE_VERSION = "contract-ai-v4"
+AI_CACHE_VERSION = "contract-ai-v5"
 CACHE_PATH = Path(__file__).resolve().parents[1] / "cache" / "contract_ai_cache.json"
 _CACHE_LOCK = threading.Lock()
 MAX_PAGE_CHARS = 6000
@@ -95,6 +95,29 @@ class DocumentPage:
     text: str
 
 
+@dataclass(frozen=True)
+class ExtractionContext:
+    title: str = ""
+    expediente: str = ""
+    lot: str = ""
+
+
+@dataclass
+class ExtractionStats:
+    model_calls: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    prompt_chars: int = 0
+    fallback_calls: int = 0
+
+    def summary(self) -> str:
+        return (
+            f"llamadas={self.model_calls} cache_hits={self.cache_hits} "
+            f"cache_misses={self.cache_misses} prompt_chars={self.prompt_chars} "
+            f"fallbacks={self.fallback_calls}"
+        )
+
+
 class ContractAIUnavailableError(Exception):
     pass
 
@@ -104,6 +127,8 @@ def extract_contract_fields_from_pages(
     *,
     model: str | None = None,
     api_key: str | None = None,
+    context: ExtractionContext | None = None,
+    stats: ExtractionStats | None = None,
 ) -> dict[str, Any]:
     if not pages:
         return {}
@@ -112,18 +137,42 @@ def extract_contract_fields_from_pages(
         raise ContractAIUnavailableError("OPENAI_API_KEY no configurada")
 
     resolved_model = model or os.getenv("TENDERSTOOL_AI_MODEL", DEFAULT_MODEL)
-    prompt_pages = _build_prompt_pages(pages)
-    response_data = _extract_response_with_cache(prompt_pages, model=resolved_model, api_key=api_key)
+    prompt_pages = _with_context(_build_prompt_pages(pages), context)
+    response_data = _extract_response_with_cache(prompt_pages, model=resolved_model, api_key=api_key, stats=stats)
     if _needs_fallback_response(response_data):
-        fallback_pages = _build_fallback_prompt_pages(pages)
+        fallback_pages = _with_context(_build_fallback_prompt_pages(pages), context)
         if fallback_pages and fallback_pages != prompt_pages:
+            if stats is not None:
+                stats.fallback_calls += 1
             fallback_data = _extract_response_with_cache(
                 "SEGUNDA PASADA: contexto ampliado para rellenar solo campos ausentes.\n\n" + fallback_pages,
                 model=resolved_model,
                 api_key=api_key,
+                stats=stats,
             )
             response_data = _merge_missing_response_values(response_data, fallback_data)
     return _flatten_response(response_data)
+
+
+def _with_context(document_text: str, context: ExtractionContext | None) -> str:
+    context_block = _build_context_block(context)
+    if not context_block:
+        return document_text
+    return f"{context_block}\n\n{document_text}"
+
+
+def _build_context_block(context: ExtractionContext | None) -> str:
+    if context is None:
+        return ""
+    lines = ["[CONTEXTO DE LA FILA]"]
+    if context.title.strip():
+        lines.append(f"Titulo: {context.title.strip()}")
+    if context.expediente.strip():
+        lines.append(f"Expediente: {context.expediente.strip()}")
+    if context.lot.strip():
+        lines.append(f"Lote objetivo: {context.lot.strip()}")
+        lines.append("Si el documento contiene varios lotes, responde solo para el lote objetivo.")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def _build_prompt_pages(pages: list[DocumentPage]) -> str:
@@ -179,16 +228,30 @@ def _select_fallback_pages(pages: list[DocumentPage]) -> list[DocumentPage]:
     return [pages[index] for index in selected]
 
 
-def _extract_response_with_cache(document_text: str, *, model: str, api_key: str) -> dict[str, Any]:
+def _extract_response_with_cache(
+    document_text: str,
+    *,
+    model: str,
+    api_key: str,
+    stats: ExtractionStats | None = None,
+) -> dict[str, Any]:
+    if stats is not None:
+        stats.prompt_chars += len(document_text)
     cache_key = _cache_key(document_text, model)
     response_data = _read_cached_response(cache_key)
-    if response_data is None:
-        response_data = _call_model(
-            document_text,
-            model=model,
-            api_key=api_key,
-        )
-        _write_cached_response(cache_key, response_data)
+    if response_data is not None:
+        if stats is not None:
+            stats.cache_hits += 1
+        return response_data
+    if stats is not None:
+        stats.cache_misses += 1
+        stats.model_calls += 1
+    response_data = _call_model(
+        document_text,
+        model=model,
+        api_key=api_key,
+    )
+    _write_cached_response(cache_key, response_data)
     return response_data
 
 
@@ -259,6 +322,8 @@ def _call_model(document_text: str, *, model: str, api_key: str) -> dict[str, An
                     "apertura, formalizacion futura no fijada o conocimiento externo. "
                     "Si no hay evidencia clara, usa value=null. Devuelve fechas ISO YYYY-MM-DD. "
                     "Normaliza duraciones en espanol: '1 año', '3 años', '6 meses'. "
+                    "Para solvencia usa siempre un resumen estable de maximo 450 caracteres con formato "
+                    "'Economica: ... | Tecnica: ... | Certificaciones: ...'. Omite bloques sin evidencia. "
                     "Si hay fecha de inicio explicita y duracion inicial explicita, puedes calcular "
                     "la fecha de fin/vencimiento inicial: origin='calculated', document y page deben "
                     "apuntar a la evidencia usada, y calculation debe explicar el calculo."

@@ -182,6 +182,74 @@ def test_contract_ai_reuses_cached_model_response(monkeypatch, tmp_path):
     assert calls == 1
 
 
+def test_contract_ai_includes_lot_context_and_tracks_cache_stats(monkeypatch, tmp_path):
+    seen_prompt = ""
+    cache_path = tmp_path / "contract_ai_cache.json"
+    stats = contract_ai_extractor.ExtractionStats()
+
+    def fake_call_model(document_text, *, model, api_key):
+        nonlocal seen_prompt
+        seen_prompt = document_text
+        data = {
+            key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+            for key in contract_ai_extractor.FIELD_KEYS
+        }
+        data["duracion_contrato"] = {
+            "value": "4 anos",
+            "document": "PCAP.pdf",
+            "page": 2,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        data["numero_maximo_prorrogas"] = {
+            "value": "0",
+            "document": "PCAP.pdf",
+            "page": 2,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        data["duracion_prorroga"] = {
+            "value": "0 meses",
+            "document": "PCAP.pdf",
+            "page": 2,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        return data
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(contract_ai_extractor, "CACHE_PATH", cache_path)
+    monkeypatch.setattr(contract_ai_extractor, "_call_model", fake_call_model)
+
+    pages = [contract_ai_extractor.DocumentPage("PCAP.pdf", 2, "Duracion del lote 1: cuatro anos.")]
+    context = contract_ai_extractor.ExtractionContext(
+        title="Contrato marco. Lote 1: licencias SAP",
+        expediente="AB/2026_lote1",
+        lot="Lote 1: licencias SAP",
+    )
+
+    first = contract_ai_extractor.extract_contract_fields_from_pages(
+        pages,
+        model="test-model",
+        context=context,
+        stats=stats,
+    )
+    second = contract_ai_extractor.extract_contract_fields_from_pages(
+        pages,
+        model="test-model",
+        context=context,
+        stats=stats,
+    )
+
+    assert first == second
+    assert "Lote objetivo: Lote 1: licencias SAP" in seen_prompt
+    assert "responde solo para el lote objetivo" in seen_prompt
+    assert stats.model_calls == 1
+    assert stats.cache_hits == 1
+    assert stats.cache_misses == 1
+    assert stats.prompt_chars > 0
+
+
 def test_contract_ai_normalizes_extensions_and_duration_labels():
     data = {
         key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
