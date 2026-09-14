@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
+import threading
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -24,6 +26,9 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 DEFAULT_MODEL = "gpt-5-mini"
 DEFAULT_AI_TIMEOUT_SECONDS = 90
 DEFAULT_AI_MAX_RETRIES = 2
+AI_CACHE_VERSION = "contract-ai-v2"
+CACHE_PATH = Path(__file__).resolve().parents[1] / "cache" / "contract_ai_cache.json"
+_CACHE_LOCK = threading.Lock()
 MAX_PAGE_CHARS = 6000
 MAX_TOTAL_CHARS = 90000
 
@@ -97,11 +102,17 @@ def extract_contract_fields_from_pages(
     if not api_key:
         raise ContractAIUnavailableError("OPENAI_API_KEY no configurada")
 
-    response_data = _call_model(
-        _build_prompt_pages(pages),
-        model=model or os.getenv("TENDERSTOOL_AI_MODEL", DEFAULT_MODEL),
-        api_key=api_key,
-    )
+    resolved_model = model or os.getenv("TENDERSTOOL_AI_MODEL", DEFAULT_MODEL)
+    prompt_pages = _build_prompt_pages(pages)
+    cache_key = _cache_key(prompt_pages, resolved_model)
+    response_data = _read_cached_response(cache_key)
+    if response_data is None:
+        response_data = _call_model(
+            prompt_pages,
+            model=resolved_model,
+            api_key=api_key,
+        )
+        _write_cached_response(cache_key, response_data)
     return _flatten_response(response_data)
 
 
@@ -171,6 +182,55 @@ def _env_positive_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _ai_cache_enabled() -> bool:
+    return os.getenv("TENDERSTOOL_AI_CACHE_ENABLED", "1").strip().casefold() not in {"0", "false", "no"}
+
+
+def _cache_key(document_text: str, model: str) -> str:
+    payload = json.dumps(
+        {
+            "version": AI_CACHE_VERSION,
+            "model": model,
+            "questions": QUESTIONS,
+            "document_text": document_text,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_cached_response(cache_key: str) -> dict[str, Any] | None:
+    if not _ai_cache_enabled():
+        return None
+    with _CACHE_LOCK:
+        cache = _load_cache()
+        value = cache.get(cache_key)
+        return value if isinstance(value, dict) else None
+
+
+def _write_cached_response(cache_key: str, response_data: dict[str, Any]) -> None:
+    if not _ai_cache_enabled():
+        return
+    with _CACHE_LOCK:
+        cache = _load_cache()
+        cache[cache_key] = response_data
+        CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = CACHE_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp_path.replace(CACHE_PATH)
+
+
+def _load_cache() -> dict[str, Any]:
+    if not CACHE_PATH.exists():
+        return {}
+    try:
+        data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _response_format() -> dict[str, Any]:

@@ -20,3 +20,5 @@ tenderstool_app/app/downloads/*
 !tenderstool_app/app/downloads/.gitkeep
 tenderstool_app/app/diagnostics/*
 !tenderstool_app/app/diagnostics/.gitkeep
+tenderstool_app/app/cache/*
+!tenderstool_app/app/cache/.gitkeep

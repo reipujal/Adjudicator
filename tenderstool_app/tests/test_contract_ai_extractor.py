@@ -125,3 +125,37 @@ def test_contract_ai_timeout_env_falls_back_to_default(monkeypatch):
 
     monkeypatch.setenv("TENDERSTOOL_AI_TIMEOUT_SECONDS", "120")
     assert contract_ai_extractor._env_positive_int("TENDERSTOOL_AI_TIMEOUT_SECONDS", 90) == 120
+
+
+def test_contract_ai_reuses_cached_model_response(monkeypatch, tmp_path):
+    calls = 0
+    cache_path = tmp_path / "contract_ai_cache.json"
+
+    def fake_call_model(document_text, *, model, api_key):
+        nonlocal calls
+        calls += 1
+        data = {
+            key: {"value": None, "document": None, "page": None, "origin": "null", "calculation": None}
+            for key in contract_ai_extractor.FIELD_KEYS
+        }
+        data["duracion_contrato"] = {
+            "value": "1 año",
+            "document": "PCAP.pdf",
+            "page": 3,
+            "origin": "explicit",
+            "calculation": None,
+        }
+        return data
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(contract_ai_extractor, "CACHE_PATH", cache_path)
+    monkeypatch.setattr(contract_ai_extractor, "_call_model", fake_call_model)
+
+    pages = [contract_ai_extractor.DocumentPage("PCAP.pdf", 3, "El contrato dura un año.")]
+
+    first = contract_ai_extractor.extract_contract_fields_from_pages(pages, model="test-model")
+    second = contract_ai_extractor.extract_contract_fields_from_pages(pages, model="test-model")
+
+    assert first == second
+    assert first["duracion_contrato"] == "1 año"
+    assert calls == 1
